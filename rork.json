@@ -1,0 +1,15 @@
+{
+  "$schema": "https://rork.com/schema/rork.json",
+  "apps": [
+    {
+      "name": "Paddle Up",
+      "path": "ios-paddle-up",
+      "framework": "swift"
+    },
+    {
+      "name": "Paddle Up Web",
+      "path": "web-paddle-up",
+      "framework": "web"
+    }
+  ]
+}
