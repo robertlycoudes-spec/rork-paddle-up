@@ -27,6 +27,7 @@ struct OnboardingRadarChart: View {
     private let solidThreshold = 0.6
 
     @State private var progress: Double = 0
+    @State private var ping = false
 
     private let chartSize: CGFloat = 290
     private let radius: CGFloat = 84
@@ -75,6 +76,9 @@ struct OnboardingRadarChart: View {
         }
         .onAppear {
             withAnimation(.easeOut(duration: 0.85).delay(0.15)) { progress = 1 }
+            withAnimation(.easeOut(duration: 1.6).delay(1.1).repeatForever(autoreverses: false)) {
+                ping = true
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
@@ -128,14 +132,28 @@ struct OnboardingRadarChart: View {
             .overlay(
                 polygon(axes.map { CGFloat($0.value) })
                     .stroke(PUColor.lime, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+                    .shadow(color: PUColor.lime.opacity(0.55), radius: 8)
             )
     }
 
     /// Vertex dots: alert below the solid threshold, lime above.
     private var dots: some View {
         ForEach(Array(axes.enumerated()), id: \.element.id) { index, axis in
+            let isWeak = axis.value < solidThreshold
+            ZStack {
+                if isWeak {
+                    // Sonar ping marks each gap.
+                    Circle()
+                        .strokeBorder(PUColor.alert.opacity(ping ? 0 : 0.8), lineWidth: 1.5)
+                        .frame(width: 11, height: 11)
+                        .scaleEffect(ping ? 2.6 : 1)
+                }
+            }
+            .position(point(axis: index, fraction: CGFloat(axis.value)))
+            .opacity(progress)
+
             Circle()
-                .fill(axis.value >= solidThreshold ? PUColor.lime : PUColor.alert)
+                .fill(isWeak ? PUColor.alert : PUColor.lime)
                 .frame(width: 11, height: 11)
                 .overlay(Circle().strokeBorder(PUColor.canvas, lineWidth: 2))
                 .position(point(axis: index, fraction: CGFloat(axis.value)))

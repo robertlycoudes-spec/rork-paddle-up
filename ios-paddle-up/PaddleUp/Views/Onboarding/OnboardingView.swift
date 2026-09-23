@@ -59,11 +59,19 @@ struct OnboardingView: View {
     @State private var selectedTime: WeeklyTrainingTime?
     @State private var answeredSteps: Set<Step> = []
 
+    private static let flowOrder: [Step] = [.hook] + questionSteps + [.analyzing, .plan, .paywall]
+
     private var questionIndex: Int? { Self.questionSteps.firstIndex(of: step) }
+
+    /// 0…1 position through the whole flow; drives the drifting backdrop bloom.
+    private var flowProgress: Double {
+        let index = Self.flowOrder.firstIndex(of: step) ?? 0
+        return Double(index) / Double(max(1, Self.flowOrder.count - 1))
+    }
 
     var body: some View {
         ZStack {
-            PUBackground().ignoresSafeArea()
+            OnboardingBackdrop(progress: flowProgress)
 
             VStack(spacing: 0) {
                 if questionIndex != nil {
@@ -87,10 +95,7 @@ struct OnboardingView: View {
     private var content: some View {
         switch step {
         case .hook:
-            HookScreen {
-                Haptics.tap()
-                advance()
-            }
+            HookScreen { advance() }
 
         case .name:
             QuestionScreen(
@@ -398,37 +403,59 @@ private struct QuestionHeader: View {
     let total: Int
     let onBack: () -> Void
 
-    var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(PUColor.textSecondary)
-                        .frame(width: 40, height: 40)
-                        .background(PUColor.surface, in: .circle)
-                        .overlay(Circle().strokeBorder(PUColor.hairline, lineWidth: 1))
-                }
-                .buttonStyle(RowPressStyle())
-                .accessibilityLabel("Back")
+    private var fraction: Double { Double(index + 1) / Double(max(1, total)) }
 
-                HStack(spacing: 6) {
-                    ForEach(0..<total, id: \.self) { segment in
+    var body: some View {
+        HStack(spacing: 14) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(PUColor.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(PUColor.surface, in: .circle)
+                    .overlay(Circle().strokeBorder(PUColor.hairline, lineWidth: 1))
+            }
+            .buttonStyle(RowPressStyle())
+            .accessibilityLabel("Back")
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("STEP \(index + 1) OF \(total)")
+                        .font(.system(size: 10, weight: .bold).monospacedDigit())
+                        .tracking(1.6)
+                        .foregroundStyle(PUColor.textSecondary)
+                        .contentTransition(.numericText(value: Double(index)))
+                    Spacer()
+                    Text("\(Int((fraction * 100).rounded()))%")
+                        .font(.system(size: 11, weight: .heavy).monospacedDigit())
+                        .foregroundStyle(PUColor.lime)
+                        .contentTransition(.numericText(value: fraction))
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.08))
                         Capsule()
-                            .fill(segment <= index ? PUColor.lime : Color.white.opacity(0.09))
-                            .frame(height: 4)
-                            .frame(maxWidth: .infinity)
+                            .fill(
+                                LinearGradient(
+                                    colors: [PUColor.lime.opacity(0.55), PUColor.lime],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(6, geo.size.width * fraction))
+                            .shimmerSweep(tint: .white, intensity: 0.7, period: 1.8)
+                            .shadow(color: PUColor.lime.opacity(0.6), radius: 6)
                     }
                 }
-
-                Text("\(index + 1)/\(total)")
-                    .font(PUFont.micro.monospacedDigit())
-                    .foregroundStyle(PUColor.textTertiary)
+                .frame(height: 5)
             }
         }
         .padding(.horizontal, PUMetrics.margin)
         .padding(.top, 8)
-        .animation(.easeOut(duration: 0.3), value: index)
+        .padding(.bottom, 4)
+        .animation(.spring(response: 0.55, dampingFraction: 0.82), value: index)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -481,7 +508,8 @@ private struct QuestionScreen<Options: View>: View {
                             }
                         }
                         Text(title)
-                            .font(.system(size: 28, weight: .heavy))
+                            .font(.system(size: 31, weight: .heavy))
+                            .tracking(-0.4)
                             .foregroundStyle(PUColor.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(subtitle)
@@ -518,18 +546,7 @@ private struct QuestionScreen<Options: View>: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Button {
-                Haptics.tap()
-                onContinue()
-            } label: {
-                HStack(spacing: 9) {
-                    Text("NEXT")
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 14, weight: .heavy))
-                }
-            }
-            .buttonStyle(PUPrimaryButtonStyle(enabled: canContinue))
-            .disabled(!canContinue)
+            OnboardingCTA(title: "NEXT", enabled: canContinue) { onContinue() }
             .opacity(canContinue ? 1 : 0)
             .offset(y: canContinue ? 0 : 12)
             .animation(.spring(response: 0.45, dampingFraction: 0.8), value: canContinue)
@@ -628,18 +645,7 @@ private struct HookScreen: View {
                     )
                 }
 
-                Button {
-                    Haptics.tap()
-                    onStart()
-                } label: {
-                    HStack(spacing: 9) {
-                        Text("CONTINUE")
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 14, weight: .heavy))
-                    }
-                }
-                .buttonStyle(PUPrimaryButtonStyle(enabled: unlocked))
-                .disabled(!unlocked)
+                OnboardingCTA(title: "CONTINUE", enabled: unlocked) { onStart() }
                 .overlay(
                     // One-shot expanding ring the moment CONTINUE unlocks.
                     Capsule()
@@ -713,20 +719,19 @@ private struct HookScreen: View {
 /// The hero brand card: glyph in a dashed orbit ring, wordmark, system tagline,
 /// pitch copy, and a hairline-divided three-up stat strip.
 private struct HeroCard: View {
-    @State private var orbits = false
-    @State private var livePulse = false
     @State private var statsIn = false
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 16) {
-                glyph
+                OrbitGlyph()
 
                 VStack(spacing: 10) {
                     Text("PADDLE UP")
                         .font(.system(size: 30, weight: .heavy))
                         .tracking(3)
                         .foregroundStyle(PUColor.textPrimary)
+                        .shimmerSweep(tint: PUColor.lime, intensity: 0.95, period: 3.2)
                     Capsule()
                         .fill(PUColor.lime)
                         .frame(width: 26, height: 3)
@@ -736,7 +741,7 @@ private struct HeroCard: View {
                         .foregroundStyle(PUColor.lime)
                 }
 
-                liveChip
+                LiveChip(text: "SYSTEM ONLINE")
 
                 Text("Your coach builds the plan, reads your game, and pushes you every single day. All you have to do is show up.")
                     .font(PUFont.body)
@@ -748,6 +753,12 @@ private struct HeroCard: View {
             .padding(.horizontal, 20)
             .padding(.top, 28)
             .padding(.bottom, 22)
+            .background(alignment: .top) {
+                CourtBackdrop()
+                    .frame(height: 190)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 36)
+            }
 
             Rectangle().fill(PUColor.hairline).frame(height: 1)
 
@@ -756,94 +767,46 @@ private struct HeroCard: View {
                 Rectangle().fill(PUColor.hairline).frame(width: 1, height: 40)
                 stat(value: "24/7", label: "AI COACH", delay: 0.65)
                 Rectangle().fill(PUColor.hairline).frame(width: 1, height: 40)
-                stat(value: "100%", label: "BUILT FOR YOU", delay: 0.75)
+                percentStat(delay: 0.75)
             }
             .padding(.vertical, 14)
         }
         .background(PUColor.surface, in: .rect(cornerRadius: PUMetrics.cardRadius))
+        .clipShape(.rect(cornerRadius: PUMetrics.cardRadius))
         .overlay(
             RoundedRectangle(cornerRadius: PUMetrics.cardRadius)
-                .strokeBorder(PUColor.hairline, lineWidth: 1)
-        )
-        .onAppear {
-            orbits = true
-            livePulse = true
-            statsIn = true
-        }
-    }
-
-    /// Ball glyph inside a raised disc, wrapped in two counter-rotating
-    /// dashed rings, each carrying a satellite dot, over a faint lime bloom —
-    /// the "live coach" motif. Every ring rotates alone around its own
-    /// centre; dots stay pinned so nothing wobbles.
-    private var glyph: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [PUColor.lime.opacity(0.16), .clear],
-                        center: .center,
-                        startRadius: 4,
-                        endRadius: 66
-                    )
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [PUColor.lime.opacity(0.4), PUColor.hairline, PUColor.hairline],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
                 )
-                .frame(width: 132, height: 132)
-
-            Circle()
-                .stroke(PUColor.lime.opacity(0.35),
-                        style: StrokeStyle(lineWidth: 1, dash: [2, 5]))
-                .frame(width: 104, height: 104)
-                .rotationEffect(.degrees(orbits ? 360 : 0))
-                .animation(.linear(duration: 48).repeatForever(autoreverses: false), value: orbits)
-
-            Circle()
-                .stroke(PUColor.lime.opacity(0.18),
-                        style: StrokeStyle(lineWidth: 1, dash: [1, 6]))
-                .frame(width: 88, height: 88)
-                .rotationEffect(.degrees(orbits ? -360 : 0))
-                .animation(.linear(duration: 36).repeatForever(autoreverses: false), value: orbits)
-
-            Circle()
-                .fill(PUColor.lime)
-                .frame(width: 7, height: 7)
-                .offset(x: -52, y: 0)
-
-            Circle()
-                .fill(PUColor.lime.opacity(0.5))
-                .frame(width: 4, height: 4)
-                .offset(x: 44, y: 0)
-
-            Circle()
-                .fill(PUColor.surfaceRaised)
-                .overlay(Circle().strokeBorder(PUColor.hairline, lineWidth: 1))
-                .frame(width: 72, height: 72)
-
-            // Symmetric mark, no offset maths: rings, disc and ball share
-            // one centre inside a square frame.
-            PUBallMark(size: 40)
-        }
-        .frame(width: 132, height: 132)
-        .onAppear { orbits = true }
+        )
+        .onAppear { statsIn = true }
     }
 
-    /// Pulsing status chip — the hook's second (and only other) ambient
-    /// animation, selling the "live coach" from the first second.
-    private var liveChip: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(PUColor.lime)
-                .frame(width: 5, height: 5)
-                .opacity(livePulse ? 1 : 0.25)
-            Text("SYSTEM ONLINE")
+    /// "100% BUILT FOR YOU" with the number rolling up once the strip lands.
+    private func percentStat(delay: Double) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 0) {
+                CountUpText(value: 100, font: .system(size: 17, weight: .heavy).monospacedDigit(),
+                            color: PUColor.textPrimary, delay: delay + 0.1)
+                Text("%")
+                    .font(.system(size: 17, weight: .heavy))
+                    .foregroundStyle(PUColor.textPrimary)
+            }
+            .opacity(statsIn ? 1 : 0)
+            .offset(y: statsIn ? 0 : 8)
+            Text("BUILT FOR YOU")
                 .font(.system(size: 10, weight: .bold))
-                .tracking(2)
-                .foregroundStyle(PUColor.lime)
+                .tracking(1.2)
+                .foregroundStyle(PUColor.textTertiary)
+                .opacity(statsIn ? 1 : 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(PUColor.lime.opacity(0.08), in: .capsule)
-        .overlay(Capsule().strokeBorder(PUColor.lime.opacity(0.22), lineWidth: 1))
-        .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: livePulse)
+        .frame(maxWidth: .infinity)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85).delay(delay), value: statsIn)
     }
 
     private func stat(value: String, label: String, delay: Double) -> some View {
@@ -976,35 +939,13 @@ private struct AdvantageCard: View {
                     }
                     .animation(.spring(response: 1.2, dampingFraction: 0.85).delay(0.25),
                                value: appeared)
+                    .shimmerSweep(isActive: isAnimated && appeared, tint: .white, intensity: 0.55, period: 2.6)
+                    .shadow(color: isAnimated ? PUColor.lime.opacity(appeared ? 0.4 : 0) : .clear,
+                            radius: 22, y: 6)
             }
             .frame(height: 216, alignment: .bottom)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// Brand glyph with slow breathing rings — the app's "live coach" motif.
-struct BallRings: View {
-    var pulse: Bool
-
-    var body: some View {
-        ZStack {
-            ForEach(0..<3, id: \.self) { ring in
-                Circle()
-                    .stroke(PUColor.lime.opacity(0.22), lineWidth: 1)
-                    .frame(width: 108 + CGFloat(ring) * 34, height: 108 + CGFloat(ring) * 34)
-                    .scaleEffect(pulse ? 1.08 : 0.94)
-                    .opacity(pulse ? 0.35 : 0.7)
-                    .animation(
-                        .easeInOut(duration: 1.9 + Double(ring) * 0.35)
-                        .repeatForever(autoreverses: true)
-                        .delay(Double(ring) * 0.25),
-                        value: pulse
-                    )
-            }
-            PUBallMark(size: 52)
-                .scaleEffect(pulse ? 1.0 : 0.82)
-        }
     }
 }
 
@@ -1031,6 +972,10 @@ private struct AnalyzingScreen: View {
                        : "Creating \(displayName)'s plan…"
     }
 
+    private var percent: Int {
+        Int((Double(completed) / Double(stages.count) * 100).rounded())
+    }
+
     private let stages: [(symbol: String, label: String)] = [
         ("scope", "Reading your game profile"),
         ("chart.bar.fill", "Comparing against benchmark ranges"),
@@ -1042,8 +987,8 @@ private struct AnalyzingScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-            BallRings(pulse: true)
-                .padding(.bottom, 34)
+            OrbitGlyph(scale: 1.25)
+                .padding(.bottom, 26)
 
             VStack(spacing: 8) {
                 Text(title)
@@ -1057,6 +1002,27 @@ private struct AnalyzingScreen: View {
                     .foregroundStyle(PUColor.textSecondary)
             }
 
+            VStack(spacing: 10) {
+                Text("\(percent)%")
+                    .font(.system(size: 44, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(PUColor.lime)
+                    .contentTransition(.numericText(value: Double(percent)))
+                    .shadow(color: PUColor.lime.opacity(0.35), radius: 14)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.08))
+                        Capsule()
+                            .fill(PUColor.lime)
+                            .frame(width: max(6, geo.size.width * Double(percent) / 100))
+                            .shimmerSweep(tint: .white, intensity: 0.7, period: 0.6)
+                            .shadow(color: PUColor.lime.opacity(0.6), radius: 6)
+                    }
+                }
+                .frame(height: 5)
+                .frame(maxWidth: 240)
+            }
+            .padding(.top, 22)
+
             VStack(spacing: 0) {
                 ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
                     HStack(spacing: 12) {
@@ -1066,6 +1032,8 @@ private struct AnalyzingScreen: View {
                                 .foregroundStyle(PUColor.limeInk)
                                 .frame(width: 22, height: 22)
                                 .background(PUColor.lime, in: .circle)
+                                .shadow(color: PUColor.lime.opacity(0.5), radius: 6)
+                                .transition(.scale(scale: 0.2).combined(with: .opacity))
                         } else if index == completed {
                             ProgressView()
                                 .tint(PUColor.lime)
@@ -1081,6 +1049,8 @@ private struct AnalyzingScreen: View {
                             .font(PUFont.body)
                             .foregroundStyle(index <= completed
                                              ? PUColor.textPrimary : PUColor.textTertiary)
+                            .shimmerSweep(isActive: index == completed, tint: PUColor.lime,
+                                          intensity: 0.9, period: 0.3)
                         Spacer(minLength: 0)
                     }
                     .padding(.vertical, 9)
@@ -1132,32 +1102,40 @@ private struct PlanScreen: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Your game plan")
-                        .puMicroLabel()
-                        .padding(.top, 24)
+                    HStack {
+                        Text("Your game plan")
+                            .puMicroLabel()
+                        Spacer()
+                        LiveChip(text: "PLAN GENERATED")
+                    }
+                    .padding(.top, 20)
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your biggest opportunity:")
                             .font(PUFont.headline)
                             .foregroundStyle(PUColor.textSecondary)
                         Text(plan.opportunity)
-                            .font(.system(size: 30, weight: .heavy))
+                            .font(.system(size: 32, weight: .heavy))
+                            .tracking(-0.4)
                             .foregroundStyle(PUColor.lime)
                             .fixedSize(horizontal: false, vertical: true)
+                            .shimmerSweep(tint: .white, intensity: 0.8, period: 2.8)
+                            .shadow(color: PUColor.lime.opacity(0.25), radius: 16)
                         Text(plan.opportunityDetail)
                             .font(PUFont.body)
                             .foregroundStyle(PUColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    HStack {
-                        Text("This week").puMicroLabel()
-                        Spacer()
-                        Text("\(plan.practiceDays) days · ~\(plan.weeklyMinutes) min")
-                            .font(PUFont.micro.monospacedDigit())
-                            .foregroundStyle(PUColor.textTertiary)
+                    HStack(spacing: PUMetrics.gutter) {
+                        planStat(value: plan.practiceDays, label: "DAYS / WEEK", delay: 0.35)
+                        planStat(value: plan.weeklyMinutes, label: "MIN / WEEK", delay: 0.45)
+                        planStat(value: plan.items.count, label: "FOCUS BLOCKS", delay: 0.55)
                     }
-                    .padding(.top, 6)
+                    .staggerIn(0, base: 0.2)
+
+                    Text("This week").puMicroLabel()
+                        .padding(.top, 4)
 
                     VStack(spacing: 0) {
                         ForEach(Array(plan.items.enumerated()), id: \.element.id) { index, item in
@@ -1168,11 +1146,15 @@ private struct PlanScreen: View {
                                     .foregroundStyle(PUColor.textPrimary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 8)
-                                (Text("\(item.amount)")
-                                    .font(.system(size: 22, weight: .heavy).monospacedDigit())
-                                 + Text(" \(item.unit)")
-                                    .font(PUFont.micro))
-                                    .foregroundStyle(PUColor.textPrimary)
+                                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                    CountUpText(value: item.amount,
+                                                font: .system(size: 22, weight: .heavy).monospacedDigit(),
+                                                color: PUColor.textPrimary,
+                                                delay: 0.45 + Double(index) * 0.13)
+                                    Text(item.unit)
+                                        .font(PUFont.micro)
+                                        .foregroundStyle(PUColor.textSecondary)
+                                }
                             }
                             .padding(.vertical, 12)
                             .opacity(appeared ? 1 : 0)
@@ -1208,8 +1190,7 @@ private struct PlanScreen: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Button("SEE MY FULL PLAN") { onContinue() }
-                .buttonStyle(PUPrimaryButtonStyle())
+            OnboardingCTA(title: "SEE MY FULL PLAN") { onContinue() }
                 .padding(.horizontal, PUMetrics.margin)
                 .padding(.top, 10)
                 .padding(.bottom, 8)
@@ -1223,6 +1204,27 @@ private struct PlanScreen: View {
         }
         .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : 14)
+    }
+
+    /// Hairline tile with a count-up numeral over a micro label.
+    private func planStat(value: Int, label: String, delay: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CountUpText(value: value, font: .system(size: 26, weight: .heavy).monospacedDigit(),
+                        color: PUColor.textPrimary, delay: delay)
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .tracking(1.1)
+                .foregroundStyle(PUColor.textTertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PUColor.surface, in: .rect(cornerRadius: PUMetrics.tileRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: PUMetrics.tileRadius)
+                .strokeBorder(PUColor.hairline, lineWidth: 1)
+        )
     }
 }
 
@@ -1246,8 +1248,10 @@ private struct PaywallScreen: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 16) {
-                    PUBallGlyph(size: 40)
-                        .padding(.top, 20)
+                    OrbitGlyph(scale: 0.85)
+                        .padding(.top, 4)
+
+                    LiveChip(text: "YOUR PLAN IS READY")
 
                     VStack(spacing: 10) {
                         Text("Your personalized game plan is ready.")
@@ -1262,18 +1266,23 @@ private struct PaywallScreen: View {
 
                     PUCard {
                         VStack(alignment: .leading, spacing: 13) {
-                            ForEach(ProFeature.allCases) { feature in
+                            ForEach(Array(ProFeature.allCases.enumerated()), id: \.element.id) { index, feature in
                                 HStack(spacing: 12) {
                                     Image(systemName: feature.symbol)
-                                        .font(.system(size: 14, weight: .semibold))
+                                        .font(.system(size: 12, weight: .bold))
                                         .foregroundStyle(PUColor.lime)
-                                        .frame(width: 22)
+                                        .frame(width: 28, height: 28)
+                                        .background(PUColor.lime.opacity(0.12), in: .circle)
                                     Text(feature.title)
                                         .font(PUFont.body)
                                         .foregroundStyle(PUColor.textPrimary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 0)
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 11, weight: .heavy))
+                                        .foregroundStyle(PUColor.lime)
                                 }
+                                .staggerIn(index, base: 0.3, step: 0.07)
                             }
                         }
                     }
@@ -1306,17 +1315,11 @@ private struct PaywallScreen: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 10) {
-                Button {
+                OnboardingCTA(title: "START TRAINING — \(selectedProduct.price)",
+                              systemImage: nil,
+                              isLoading: store.isPurchasing) {
                     purchase()
-                } label: {
-                    if store.isPurchasing {
-                        ProgressView().tint(PUColor.limeInk)
-                    } else {
-                        Text("START TRAINING — \(selectedProduct.price)")
-                    }
                 }
-                .buttonStyle(PUPrimaryButtonStyle())
-                .disabled(store.isPurchasing)
 
                 Button("Continue with limited access") {
                     Haptics.tap()
@@ -1390,15 +1393,16 @@ private struct ProductRow: View {
                 }
             }
             .padding(16)
-            .background(isSelected ? PUColor.surfaceRaised : PUColor.surface,
-                        in: .rect(cornerRadius: PUMetrics.tileRadius))
+            .background { SelectedTileBackground(isSelected: isSelected) }
             .overlay(
                 RoundedRectangle(cornerRadius: PUMetrics.tileRadius)
-                    .strokeBorder(isSelected ? PUColor.lime.opacity(0.55) : PUColor.hairline,
-                                  lineWidth: 1)
+                    .strokeBorder(isSelected ? PUColor.lime.opacity(0.7) : PUColor.hairline,
+                                  lineWidth: isSelected ? 1.5 : 1)
             )
+            .shadow(color: PUColor.lime.opacity(isSelected ? 0.18 : 0), radius: 14, y: 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(RowPressStyle())
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isSelected)
     }
 }
 
@@ -1416,9 +1420,11 @@ struct SelectionRow: View {
             HStack(spacing: 14) {
                 if let symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(isSelected ? PUColor.lime : PUColor.textTertiary)
-                        .frame(width: 24)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isSelected ? PUColor.limeInk : PUColor.textSecondary)
+                        .frame(width: 36, height: 36)
+                        .background(isSelected ? PUColor.lime : PUColor.surfaceRaised, in: .circle)
+                        .symbolEffect(.bounce, value: isSelected)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
@@ -1442,25 +1448,59 @@ struct SelectionRow: View {
                         Circle()
                             .fill(PUColor.lime)
                             .frame(width: 22, height: 22)
+                            .shadow(color: PUColor.lime.opacity(0.6), radius: 6)
+                            .transition(.scale(scale: 0.3).combined(with: .opacity))
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .heavy))
                             .foregroundStyle(PUColor.limeInk)
+                            .transition(.scale(scale: 0.3).combined(with: .opacity))
                     }
                 }
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+                .animation(.spring(response: 0.3, dampingFraction: 0.55), value: isSelected)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? PUColor.surfaceRaised : PUColor.surface,
-                        in: .rect(cornerRadius: PUMetrics.tileRadius))
+            .background { SelectedTileBackground(isSelected: isSelected) }
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(PUColor.lime)
+                    .frame(width: 3)
+                    .padding(.vertical, 14)
+                    .scaleEffect(x: 1, y: isSelected ? 1 : 0.2)
+                    .opacity(isSelected ? 1 : 0)
+                    .shadow(color: PUColor.lime.opacity(0.8), radius: 4)
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: PUMetrics.tileRadius)
-                    .strokeBorder(isSelected ? PUColor.lime.opacity(0.55) : PUColor.hairline,
+                    .strokeBorder(isSelected ? PUColor.lime.opacity(0.6) : PUColor.hairline,
                                   lineWidth: 1)
             )
+            .shadow(color: PUColor.lime.opacity(isSelected ? 0.14 : 0), radius: 14, y: 4)
         }
         .buttonStyle(RowPressStyle())
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isSelected)
+    }
+}
+
+/// Tile fill for selectable rows: surface at rest; raised surface with a lime
+/// wash sweeping in from the leading edge when picked.
+private struct SelectedTileBackground: View {
+    let isSelected: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: PUMetrics.tileRadius)
+        ZStack {
+            shape.fill(isSelected ? PUColor.surfaceRaised : PUColor.surface)
+            shape
+                .fill(
+                    LinearGradient(
+                        colors: [PUColor.lime.opacity(0.13), PUColor.lime.opacity(0)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .opacity(isSelected ? 1 : 0)
+        }
     }
 }
 
@@ -1518,10 +1558,11 @@ private struct NameField: View {
         .overlay(
             RoundedRectangle(cornerRadius: PUMetrics.cardRadius)
                 .strokeBorder(
-                    isFocused ? PUColor.lime.opacity(0.55) : PUColor.hairline,
-                    lineWidth: 1
+                    isFocused ? PUColor.lime.opacity(0.7) : PUColor.hairline,
+                    lineWidth: isFocused ? 1.5 : 1
                 )
         )
+        .shadow(color: PUColor.lime.opacity(isFocused ? 0.18 : 0), radius: 16, y: 4)
         .animation(.easeOut(duration: 0.2), value: isFocused)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { isFocused = true }
