@@ -150,45 +150,25 @@ final class PracticeEngine: NSObject {
     // MARK: - Pipeline
 
     private func handle(window: RepWindow) {
-        // Classify (side detection + plausibility) within the session's shot.
-        let classification = ShotClassifier.classify(window: window, hand: hand, expected: shot)
-        lastClassificationConfidence = classification.confidence
-
-        // Measure → score → coach.
-        let measurements = MechanicsAnalyzer.measure(window: window, shot: classification.shot, hand: hand)
-        guard !measurements.isEmpty else { return }
-
-        let combinedConfidence = window.detectionConfidence * (0.7 + 0.3 * classification.confidence)
-        let analysis = ScoringEngine.score(measurements: measurements, shot: classification.shot,
-                                           detectionConfidence: combinedConfidence)
-        let coaching = CoachingEngine.coach(analysis: analysis)
+        // Classify → measure → score → coach, shared with uploaded-video analysis.
+        let outcome = RepPipeline.process(window: window, expected: shot, hand: hand,
+                                          sessionID: session.id, index: repCount + 1, timestamp: .now)
+        lastClassificationConfidence = outcome.classificationConfidence
+        guard let scored = outcome.scored else { return }
 
         repCount += 1
-        var rep = RepRecord(
-            sessionID: session.id,
-            index: repCount,
-            timestamp: .now,
-            shot: classification.shot,
-            score: analysis.score,
-            mechanics: analysis.mechanics,
-            dominantIssue: analysis.dominantIssue,
-            issueID: coaching.issue?.id,
-            correction: coaching.correction,
-            nextRepCue: coaching.cue,
-            recommendedDrillID: coaching.drillID,
-            confidence: analysis.confidence,
-            poseFrames: downsample(window.frames),
-            rubricVersion: analysis.rubricVersion
-        )
+        var rep = scored.rep
+        let coaching = scored.coaching
+        let analysisScore = rep.score
 
         currentCue = coaching.cue
         let feedback = LiveRepFeedback(rep: rep, coaching: coaching)
         latestFeedback = feedback
 
-        Haptics.repDetected(score: analysis.score)
+        Haptics.repDetected(score: analysisScore)
         voice.handle(coaching: coaching, repIndex: repCount)
         appState?.analytics.record(.repDetected, properties: [
-            "shot": classification.shot.rawValue, "score": String(Int(analysis.score))
+            "shot": rep.shot.rawValue, "score": String(Int(analysisScore))
         ])
 
         // Persist the rep immediately so a crash never loses practice data.
@@ -213,14 +193,6 @@ final class PracticeEngine: NSObject {
                 }
             }
         }
-    }
-
-    /// Keep at most ~24 pose frames per rep for replay/Swing Match, so stored
-    /// sessions stay small.
-    private func downsample(_ frames: [PoseFrame]) -> [PoseFrame] {
-        guard frames.count > 24 else { return frames }
-        let stride = Double(frames.count) / 24
-        return (0..<24).compactMap { frames[safe: Int(Double($0) * stride)] }
     }
 }
 

@@ -30,6 +30,12 @@ final class AssessmentFlowUITests: XCTestCase {
         XCTAssertTrue(startAssessment.waitForExistence(timeout: 10), "START ASSESSMENT not found")
         startAssessment.tap()
 
+        // Source picker: both inputs must be offered.
+        let recordLive = app.buttons["Record Live"]
+        XCTAssertTrue(recordLive.waitForExistence(timeout: 10), "Record Live option missing")
+        XCTAssertTrue(app.buttons["Upload Video"].exists, "Upload Video option missing")
+        recordLive.tap()
+
         allowCameraIfAsked()
 
         // Any of the camera flow's states proves the cover presented and the
@@ -47,11 +53,18 @@ final class AssessmentFlowUITests: XCTestCase {
         XCTAssertTrue(reached, "Camera setup flow never appeared")
         XCTAssertEqual(app.state, .runningForeground)
 
-        // Cancelling must also work (it writes back to PracticeRouter).
+        if setupTitle.exists {
+            // Setup is guidance-only: Skip must always be available.
+            XCTAssertTrue(app.buttons["Skip camera setup"].exists, "Skip camera setup missing")
+        }
+
+        // Back out to the source picker, then close the flow (writes back to PracticeRouter).
         let cancel = app.buttons["Cancel setup"].exists ? app.buttons["Cancel setup"]
             : (app.buttons["GO BACK"].exists ? app.buttons["GO BACK"] : app.buttons["Not now"])
         if cancel.exists {
             cancel.tap()
+            let close = app.buttons["Close"]
+            if close.waitForExistence(timeout: 5) { close.tap() }
             XCTAssertTrue(startAssessment.waitForExistence(timeout: 10), "Did not return to Practice tab")
         }
         XCTAssertEqual(app.state, .runningForeground)

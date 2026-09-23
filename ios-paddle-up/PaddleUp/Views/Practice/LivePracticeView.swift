@@ -13,24 +13,46 @@ struct PracticeSetupFlow: View {
 
     @Environment(AppState.self) private var appState
     @Environment(PracticeRouter.self) private var router
-    @State private var phase: Phase = .setup
+    @State private var phase: Phase = .chooseSource
 
-    private enum Phase: Equatable { case setup, live }
+    private enum Phase: Equatable { case chooseSource, setup, live, upload }
 
     var body: some View {
         Group {
             switch phase {
+            case .chooseSource:
+                SessionSourcePickerView(
+                    configuration: configuration,
+                    onRecordLive: { go(.setup) },
+                    onUpload: { go(.upload) },
+                    onCancel: { router.activeConfiguration = nil }
+                )
             case .setup:
                 CameraSetupView(
                     configuration: configuration,
-                    onReady: { withAnimation(.easeInOut(duration: 0.25)) { phase = .live } },
-                    onCancel: { router.activeConfiguration = nil }
+                    onReady: { go(.live) },
+                    onCancel: { go(.chooseSource) },
+                    onSkip: { go(.live) },
+                    onUpload: { go(.upload) }
                 )
             case .live:
                 LivePracticeView(configuration: configuration)
+            case .upload:
+                UploadSessionView(
+                    configuration: configuration,
+                    onBack: { go(.chooseSource) },
+                    onFinished: { sessionID in
+                        router.activeConfiguration = nil
+                        router.completedSessionID = sessionID
+                    }
+                )
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func go(_ next: Phase) {
+        withAnimation(.easeInOut(duration: 0.25)) { phase = next }
     }
 }
 

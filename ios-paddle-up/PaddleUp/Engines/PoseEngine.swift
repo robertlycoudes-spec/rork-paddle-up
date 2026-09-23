@@ -78,6 +78,20 @@ nonisolated final class PoseEngine: @unchecked Sendable {
         return convert(observation: observation, time: time)
     }
 
+    /// Synchronous pose detection on one decoded video frame (uploaded-video
+    /// analysis). Reuse `request` across frames to avoid re-allocating Vision state.
+    static func detectPose(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation,
+                           time: TimeInterval, using request: VNDetectHumanBodyPoseRequest) -> PoseFrame? {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+        guard let observation = request.results?.first else { return nil }
+        return convert(observation: observation, time: time)
+    }
+
     private static let jointMap: [VNHumanBodyPoseObservation.JointName: PoseJoint] = [
         .nose: .nose, .neck: .neck, .root: .root,
         .leftShoulder: .leftShoulder, .rightShoulder: .rightShoulder,
