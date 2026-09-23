@@ -306,7 +306,13 @@ struct SettingsView: View {
     private var accountSection: some View {
         Section {
             NavigationLink { AccountView() } label: {
-                Label("Account", systemImage: "person.crop.circle")
+                HStack {
+                    Label("Account", systemImage: "person.crop.circle")
+                    Spacer()
+                    Text(cloudAuth.isSignedIn ? "Signed in" : "Not signed in")
+                        .font(PUFont.caption)
+                        .foregroundStyle(PUColor.textSecondary)
+                }
             }
         } header: {
             Text("Account")

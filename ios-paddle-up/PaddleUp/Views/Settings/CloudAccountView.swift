@@ -18,10 +18,9 @@ struct CloudAccountView: View {
 
     var body: some View {
         List {
+            CloudConnectionSections(showsPitch: true)
             if cloudAuth.isSignedIn {
-                signedInSections
-            } else {
-                signedOutSection
+                deleteCloudSection
             }
         }
         .scrollContentBackground(.hidden)
@@ -53,109 +52,14 @@ struct CloudAccountView: View {
         }
     }
 
-    // MARK: - Signed out
+    // MARK: - Delete cloud copy
 
-    private var signedOutSection: some View {
+    private var deleteCloudSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 10) {
-                PUIconBadge(symbol: "icloud.and.arrow.up")
-                Text("Keep your progress safe")
-                    .font(PUFont.headline)
-                    .foregroundStyle(PUColor.textPrimary)
-                Text("Sign in to back up your profile, sessions, reps, mechanic history, plans and settings — and pick up where you left off on a new phone. Rep videos always stay on this device.")
-                    .font(PUFont.caption)
-                    .foregroundStyle(PUColor.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 6)
-
-            Button {
-                Task { await cloudAuth.signIn(provider: "apple") }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "apple.logo")
-                    Text("Continue with Apple")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PUPrimaryButtonStyle())
-            .disabled(cloudAuth.isSigningIn)
-
-            Button {
-                Task { await cloudAuth.signIn(provider: "google") }
-            } label: {
-                HStack {
-                    Image(systemName: "globe")
-                    Text("Continue with Google")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PUSecondaryButtonStyle())
-            .disabled(cloudAuth.isSigningIn)
-
-            if cloudAuth.isSigningIn {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
-            }
-        } footer: {
-            Text("Optional. Paddle Up works fully without an account.")
-        }
-        .listRowBackground(PUColor.surface)
-    }
-
-    // MARK: - Signed in
-
-    @ViewBuilder
-    private var signedInSections: some View {
-        Section {
-            LabeledContent("Signed in as", value: cloudAuth.user?.email.isEmpty == false
-                           ? (cloudAuth.user?.email ?? "") : (cloudAuth.user?.name ?? "Your account"))
-            LabeledContent("Status", value: statusText)
-            if let last = sync.lastSyncedAt {
-                LabeledContent("Last synced", value: last.formatted(date: .omitted, time: .shortened))
-            }
-            Button {
-                Task { await sync.syncNow() }
-            } label: {
-                HStack {
-                    Text("Sync now")
-                    Spacer()
-                    if sync.status == .syncing { ProgressView() }
-                }
-            }
-            .foregroundStyle(PUColor.lime)
-            .disabled(sync.status == .syncing)
-        } header: {
-            Text("Cloud backup")
-        } footer: {
-            Text("Changes on this device sync automatically. If this device and the cloud both changed while offline, the most recent change wins.")
-        }
-        .listRowBackground(PUColor.surface)
-
-        Section {
-            Button("Sign out") { cloudAuth.signOut() }
-                .foregroundStyle(PUColor.textPrimary)
             Button("Delete cloud data", role: .destructive) { showingDeleteCloud = true }
         } footer: {
-            if let deleteMessage {
-                Text(deleteMessage)
-            } else {
-                Text("Signing out keeps everything on this device; it just stops syncing.")
-            }
+            Text(deleteMessage ?? "Removes your cloud copy only. Data on this iPhone stays.")
         }
         .listRowBackground(PUColor.surface)
-    }
-
-    private var statusText: String {
-        switch sync.status {
-        case .idle: return "Up to date"
-        case .syncing: return "Syncing…"
-        case .offline: return "Offline — will sync on reconnect"
-        case .failed(let message): return message
-        case .signedOut: return "Signed out"
-        }
     }
 }

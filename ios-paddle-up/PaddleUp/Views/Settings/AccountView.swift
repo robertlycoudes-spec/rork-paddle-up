@@ -18,6 +18,8 @@ struct AccountView: View {
 
     var body: some View {
         List {
+            CloudConnectionSections(showsPitch: true)
+
             Section {
                 HStack {
                     Text("Name")
@@ -78,6 +80,14 @@ struct AccountView: View {
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { displayName = appState.profile.displayName }
+        .alert("Sign-in problem", isPresented: Binding(
+            get: { cloudAuth.errorMessage != nil },
+            set: { if !$0 { cloudAuth.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(cloudAuth.errorMessage ?? "")
+        }
         .alert("Delete all data?", isPresented: $showingDeleteAccount) {
             Button("Cancel", role: .cancel) {}
             Button("Delete permanently", role: .destructive) {
