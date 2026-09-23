@@ -14,13 +14,17 @@ import SwiftUI
 
 extension View {
     /// A diagonal band of light that sweeps across the view's own shape on a loop.
+    /// Pass `shape` for solid shapes (buttons, bars) so the band is clipped to it
+    /// instead of duplicating the whole view as a mask.
     func shimmerSweep(
         isActive: Bool = true,
         tint: Color = .white,
         intensity: Double = 0.45,
-        period: Double = 2.4
+        period: Double = 2.4,
+        shape: AnyShape? = nil
     ) -> some View {
-        modifier(ShimmerSweep(isActive: isActive, tint: tint, intensity: intensity, period: period))
+        modifier(ShimmerSweep(isActive: isActive, tint: tint, intensity: intensity,
+                              period: period, shape: shape))
     }
 
     /// Fades, lifts and de-blurs the view in, delayed by its list position.
@@ -34,14 +38,23 @@ private struct ShimmerSweep: ViewModifier {
     let tint: Color
     let intensity: Double
     let period: Double
+    let shape: AnyShape?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content.overlay {
-            if isActive {
-                ShimmerBand(tint: tint, intensity: intensity, period: period)
-                    .mask(content)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+            if isActive && !reduceMotion {
+                if let shape {
+                    ShimmerBand(tint: tint, intensity: intensity, period: period)
+                        .clipShape(shape)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                } else {
+                    ShimmerBand(tint: tint, intensity: intensity, period: period)
+                        .mask { content.accessibilityHidden(true) }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
         }
     }
@@ -56,8 +69,8 @@ private struct ShimmerBand: View {
 
     var body: some View {
         GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
+            let width = max(1, geo.size.width)
+            let height = max(1, geo.size.height)
             let band = max(36, width * 0.28)
             LinearGradient(
                 colors: [tint.opacity(0), tint.opacity(intensity), tint.opacity(0)],
@@ -69,7 +82,7 @@ private struct ShimmerBand: View {
             .position(x: -band + phase * (width + band * 2), y: height / 2)
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.0).delay(period).repeatForever(autoreverses: false)) {
+            withAnimation(.easeInOut(duration: 1.0).delay(max(0.8, period)).repeatForever(autoreverses: false)) {
                 phase = 1
             }
         }
@@ -124,8 +137,16 @@ struct OnboardingCTA: View {
             }
         }
         .buttonStyle(PUPrimaryButtonStyle(enabled: enabled))
-        .shimmerSweep(isActive: enabled && !isLoading, tint: .white, intensity: 0.5, period: 2.2)
-        .shadow(color: PUColor.lime.opacity(enabled ? 0.35 : 0), radius: 18, y: 6)
+        .shimmerSweep(isActive: enabled && !isLoading, tint: .white, intensity: 0.5,
+                      period: 2.2, shape: AnyShape(Capsule()))
+        .background {
+            // Glow drawn from a plain capsule, not by shadowing the whole button.
+            Capsule()
+                .fill(PUColor.lime.opacity(enabled ? 0.3 : 0))
+                .blur(radius: 14)
+                .offset(y: 6)
+                .allowsHitTesting(false)
+        }
         .disabled(!enabled || isLoading)
     }
 }
@@ -323,12 +344,12 @@ struct CountUpText: View {
             .foregroundStyle(color)
             .contentTransition(.numericText(value: Double(shown)))
             .task(id: value) {
-                try? await Task.sleep(for: .seconds(delay))
+                guard value > 0 else { shown = value; return }
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                 let steps = min(max(value, 1), 24)
                 let stepDelay = max(1, Int(duration * 1000) / steps)
                 for step in 1...steps {
-                    try? await Task.sleep(for: .milliseconds(stepDelay))
-                    if Task.isCancelled { return }
+                    do { try await Task.sleep(for: .milliseconds(stepDelay)) } catch { return }
                     let next = Int((Double(value) * Double(step) / Double(steps)).rounded())
                     withAnimation(.snappy(duration: 0.2)) { shown = next }
                 }
@@ -348,10 +369,17 @@ struct OnboardingBackdrop: View {
         ZStack {
             PUBackground()
             GeometryReader { geo in
+                // Radial gradient instead of a huge live blur: same look, far cheaper.
                 Circle()
-                    .fill(PUColor.lime.opacity(0.07))
-                    .frame(width: 340, height: 340)
-                    .blur(radius: 90)
+                    .fill(
+                        RadialGradient(
+                            colors: [PUColor.lime.opacity(0.09), PUColor.lime.opacity(0)],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: 220
+                        )
+                    )
+                    .frame(width: 440, height: 440)
                     .position(x: geo.size.width * (0.15 + 0.7 * progress),
                               y: geo.size.height * 0.12)
                     .animation(.easeInOut(duration: 0.9), value: progress)

@@ -74,8 +74,8 @@ struct OnboardingView: View {
             OnboardingBackdrop(progress: flowProgress)
 
             VStack(spacing: 0) {
-                if questionIndex != nil {
-                    QuestionHeader(index: questionIndex!, total: Self.questionSteps.count) {
+                if let questionIndex {
+                    QuestionHeader(index: questionIndex, total: Self.questionSteps.count) {
                         goBack()
                     }
                     .transition(.opacity)
@@ -444,7 +444,8 @@ private struct QuestionHeader: View {
                                 )
                             )
                             .frame(width: max(6, geo.size.width * fraction))
-                            .shimmerSweep(tint: .white, intensity: 0.7, period: 1.8)
+                            .shimmerSweep(tint: .white, intensity: 0.7, period: 1.8,
+                                          shape: AnyShape(Capsule()))
                             .shadow(color: PUColor.lime.opacity(0.6), radius: 6)
                     }
                 }
@@ -1014,7 +1015,8 @@ private struct AnalyzingScreen: View {
                         Capsule()
                             .fill(PUColor.lime)
                             .frame(width: max(6, geo.size.width * Double(percent) / 100))
-                            .shimmerSweep(tint: .white, intensity: 0.7, period: 0.6)
+                            .shimmerSweep(tint: .white, intensity: 0.7, period: 0.6,
+                                          shape: AnyShape(Capsule()))
                             .shadow(color: PUColor.lime.opacity(0.6), radius: 6)
                     }
                 }
