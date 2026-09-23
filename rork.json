@@ -10,6 +10,11 @@
       "name": "Functions",
       "path": "functions",
       "framework": "cloudflare"
+    },
+    {
+      "name": "Paddle Up Site",
+      "path": "site-paddle-up",
+      "framework": "web"
     }
   ]
 }

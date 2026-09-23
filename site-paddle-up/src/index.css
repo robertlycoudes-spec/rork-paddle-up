@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  RDL Development / Paddle Up site — design tokens mirror the Paddle Up app
+  (.rork/DESIGN.md): near-black canvas, charcoal surfaces, one lime accent.
+  All colors are HSL channel triplets.
+*/
+
+@layer base {
+  :root {
+    --canvas: 135 15% 5.1%;
+    --canvas-deep: 140 18% 3.3%;
+    --surface: 130 12% 9.4%;
+    --surface-raised: 128 12% 12.5%;
+    --lime: 78 100% 62%;
+    --lime-ink: 93 52% 4.1%;
+    --text-primary: 96 24% 95.9%;
+    --text-secondary: 126 5% 56.9%;
+    --text-tertiary: 133 5% 38.6%;
+
+    --background: var(--canvas);
+    --foreground: var(--text-primary);
+    --card: var(--surface);
+    --card-foreground: var(--text-primary);
+    --popover: var(--surface-raised);
+    --popover-foreground: var(--text-primary);
+    --primary: var(--lime);
+    --primary-foreground: var(--lime-ink);
+    --secondary: var(--surface-raised);
+    --secondary-foreground: var(--text-primary);
+    --muted: var(--surface);
+    --muted-foreground: var(--text-secondary);
+    --accent: var(--surface-raised);
+    --accent-foreground: var(--text-primary);
+    --destructive: 4 100% 66%;
+    --destructive-foreground: var(--text-primary);
+    --border: 135 6% 13%;
+    --input: 135 6% 13%;
+    --ring: var(--lime);
+    --radius: 1rem;
+
+    --sidebar-background: var(--surface);
+    --sidebar-foreground: var(--text-primary);
+    --sidebar-primary: var(--lime);
+    --sidebar-primary-foreground: var(--lime-ink);
+    --sidebar-accent: var(--surface-raised);
+    --sidebar-accent-foreground: var(--text-primary);
+    --sidebar-border: 135 6% 13%;
+    --sidebar-ring: var(--lime);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+
+  ::selection {
+    background: hsl(var(--lime));
+    color: hsl(var(--lime-ink));
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--lime));
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+}
+
+@layer components {
+  /* The app's PUBackground: two faint court-green blooms over the canvas. */
+  .atmosphere {
+    background-image:
+      radial-gradient(56rem 36rem at 92% -6%, rgb(30 58 18 / 0.55), transparent 62%),
+      radial-gradient(48rem 34rem at 4% 104%, rgb(14 36 16 / 0.6), transparent 62%);
+  }
+
+  /* Micro label — uppercase, tracked, secondary. Sits above every number. */
+  .micro {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-fg-secondary;
+  }
+
+  .hairline-card {
+    @apply rounded-[20px] border border-hairline bg-surface;
+  }
+
+  .text-link {
+    @apply font-medium text-lime underline decoration-lime/40 underline-offset-4 transition-colors hover:decoration-lime;
+  }
+}
