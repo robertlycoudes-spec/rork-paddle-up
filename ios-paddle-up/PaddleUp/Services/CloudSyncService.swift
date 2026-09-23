@@ -194,7 +194,6 @@ final class CloudSyncService {
         request.httpMethod = method
         request.timeoutInterval = 30
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("ios", forHTTPHeaderField: "X-PaddleUp-Platform")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
     }

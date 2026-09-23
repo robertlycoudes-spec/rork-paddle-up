@@ -112,14 +112,14 @@ struct OnboardingView: View {
 
         case .level:
             QuestionScreen(
-                title: "What's your level?",
+                title: "What's your DUPR rating?",
                 subtitle: "Know your DUPR? Pick the range it falls in. If not, pick the description that fits best.",
                 eyebrow: "YOUR BASELINE",
                 canContinue: answeredSteps.contains(.level),
                 onContinue: { advance() }
             ) {
                 ForEach(DuprRange.allCases) { range in
-                    SelectionRow(title: "\(range.rangeLabel)  ·  \(range.displayName)",
+                    SelectionRow(title: "DUPR \(range.rangeLabel)  ·  \(range.displayName)",
                                  detail: range.detail,
                                  isSelected: selectedRange == range) {
                         select {

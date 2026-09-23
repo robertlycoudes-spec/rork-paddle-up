@@ -7,11 +7,6 @@
       "framework": "swift"
     },
     {
-      "name": "Paddle Up Web",
-      "path": "web-paddle-up",
-      "framework": "web"
-    },
-    {
       "name": "Functions",
       "path": "functions",
       "framework": "cloudflare"

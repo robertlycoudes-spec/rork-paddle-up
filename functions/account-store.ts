@@ -1,6 +1,6 @@
 // functions/account-store.ts
 //
-// One Durable Object per (platform, user). Its SQLite database holds the
+// One Durable Object per signed-in iOS user. Its SQLite database holds the
 // player's synced data in tables that mirror the client's AccountData schema
 // (PlayerProfile, AppSettings, Session, Rep, MechanicHistory, PracticePlan,
 // Achievement, UserFeedback). Field names inside each row's JSON are exactly
@@ -126,7 +126,6 @@ export class AccountStore extends DurableObject<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     const userID = request.headers.get("X-PaddleUp-User") ?? "";
-    const platform = request.headers.get("X-PaddleUp-Platform") ?? "";
 
     switch (request.method) {
       case "GET": {
@@ -152,7 +151,7 @@ export class AccountStore extends DurableObject<Env> {
         if (storedModifiedAt !== null && storedModifiedAt > incoming.modifiedAt) {
           return json({ error: "stale", snapshot: this.readSnapshot() }, 409);
         }
-        this.writeSnapshot(incoming, userID, platform);
+        this.writeSnapshot(incoming, userID);
         return json({ ok: true, modifiedAt: incoming.modifiedAt });
       }
       case "DELETE": {
@@ -171,7 +170,7 @@ export class AccountStore extends DurableObject<Env> {
     return rows[0]?.modified_at ?? null;
   }
 
-  private writeSnapshot(snapshot: Snapshot, userID: string, platform: string): void {
+  private writeSnapshot(snapshot: Snapshot, userID: string): void {
     const sql = this.ctx.storage.sql;
     const data = snapshot.data;
     const now = Date.now();
@@ -181,9 +180,8 @@ export class AccountStore extends DurableObject<Env> {
 
       sql.exec(
         `INSERT INTO account_meta (id, user_id, platform, modified_at, schema_version, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?)`,
+         VALUES (1, ?, 'ios', ?, ?, ?)`,
         userID,
-        platform,
         snapshot.modifiedAt,
         typeof snapshot.schemaVersion === "number" ? snapshot.schemaVersion : 1,
         now,
