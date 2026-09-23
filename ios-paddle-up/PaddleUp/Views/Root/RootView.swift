@@ -39,6 +39,7 @@ struct RootView: View {
     @Environment(StoreService.self) private var store
     @Environment(CloudAuthService.self) private var cloudAuth
     @Environment(CloudSyncService.self) private var sync
+    @Environment(CompAccessService.self) private var comp
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showingSplash = true
@@ -68,6 +69,7 @@ struct RootView: View {
             sync.attach(appState)
             async let splash: Void = { try? await Task.sleep(for: .milliseconds(1100)) }()
             await cloudAuth.checkAuth()
+            await comp.refresh()
             await sync.syncNow()
             await splash
             withAnimation(.easeInOut(duration: 0.45)) { showingSplash = false }
@@ -78,15 +80,20 @@ struct RootView: View {
             } else if !showingSplash {
                 Task {
                     await store.refreshEntitlements()
+                    await comp.refresh()
                     await sync.syncNow()
                 }
             }
         }
         .onChange(of: cloudAuth.isSignedIn) { _, signedIn in
             if signedIn {
-                Task { await sync.syncNow() }
+                Task {
+                    await comp.refresh()
+                    await sync.syncNow()
+                }
             } else {
                 sync.signedOut()
+                comp.signedOut()
             }
         }
     }

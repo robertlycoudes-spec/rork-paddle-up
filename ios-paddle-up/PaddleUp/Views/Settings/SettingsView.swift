@@ -11,15 +11,21 @@ struct SettingsView: View {
     @Environment(StoreService.self) private var store
     @Environment(CloudAuthService.self) private var cloudAuth
     @Environment(CloudSyncService.self) private var sync
+    @Environment(CompAccessService.self) private var comp
     @Environment(\.dismiss) private var dismiss
 
     @State private var showingDeveloperTuning = false
     @State private var showingManageSubscriptions = false
+    @State private var showingOfferCodeSheet = false
     @State private var restoreMessage: String?
+    @State private var compCode: String = ""
+    @State private var compResult: CompAccessService.RedeemResult?
+    @FocusState private var compFieldFocused: Bool
 
     var body: some View {
         List {
             subscriptionSection
+            redeemSection
             cloudSection
             coachingSection
             practiceSection
@@ -42,6 +48,9 @@ struct SettingsView: View {
         .onChange(of: showingManageSubscriptions) { _, isShowing in
             if !isShowing { Task { await store.refreshEntitlements() } }
         }
+        .offerCodeRedemption(isPresented: $showingOfferCodeSheet) { _ in
+            Task { await store.offerCodeRedemptionFinished() }
+        }
     }
 
     // MARK: - Sections
@@ -53,8 +62,18 @@ struct SettingsView: View {
                     Label("Paddle Up Pro", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(PUColor.lime)
                     Spacer()
-                    Text(store.activeProduct?.title ?? "Active")
+                    Text(store.activeProduct?.title ?? (store.hasActiveComp ? "Friend code" : "Active"))
                         .foregroundStyle(PUColor.textSecondary)
+                }
+                if !store.hasVerifiedEntitlement, store.hasActiveComp {
+                    HStack {
+                        Text("Free access")
+                        Spacer()
+                        Text(store.compEntitlement?.compExpiresAt.map {
+                            "Ends \($0.formatted(date: .abbreviated, time: .omitted))"
+                        } ?? "Lifetime")
+                            .foregroundStyle(PUColor.textSecondary)
+                    }
                 }
                 if let expiry = store.expirationDate {
                     HStack {
@@ -64,8 +83,10 @@ struct SettingsView: View {
                             .foregroundStyle(PUColor.textSecondary)
                     }
                 }
-                Button("Manage subscription") { showingManageSubscriptions = true }
-                    .foregroundStyle(PUColor.textPrimary)
+                if store.hasVerifiedEntitlement {
+                    Button("Manage subscription") { showingManageSubscriptions = true }
+                        .foregroundStyle(PUColor.textPrimary)
+                }
             } else {
                 NavigationLink { PaywallView() } label: {
                     Label("Upgrade to Paddle Up Pro", systemImage: "sparkles")
@@ -92,6 +113,87 @@ struct SettingsView: View {
             if let restoreMessage { Text(restoreMessage) }
         }
         .listRowBackground(PUColor.surface)
+    }
+
+    /// Two separate redemption paths: Apple's offer-code sheet for App Store
+    /// creator discounts, and a friend comp code checked by Paddle Up's server.
+    private var redeemSection: some View {
+        Section {
+            Button {
+                showingOfferCodeSheet = true
+            } label: {
+                Label("Redeem App Store offer code", systemImage: "giftcard")
+            }
+            .foregroundStyle(PUColor.textPrimary)
+            .accessibilityIdentifier("redeem-offer-code")
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Friend code")
+                    .font(PUFont.caption)
+                    .foregroundStyle(PUColor.textSecondary)
+                HStack(spacing: 10) {
+                    TextField("Enter code", text: $compCode)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .focused($compFieldFocused)
+                        .submitLabel(.go)
+                        .onSubmit(redeemCompCode)
+                        .padding(.horizontal, 12)
+                        .frame(height: 44)
+                        .background(PUColor.surfaceRaised, in: .rect(cornerRadius: 10))
+                        .accessibilityIdentifier("comp-code-field")
+                    Button(action: redeemCompCode) {
+                        if comp.isRedeeming {
+                            ProgressView().tint(PUColor.limeInk)
+                        } else {
+                            Text("Apply")
+                        }
+                    }
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(PUColor.limeInk)
+                    .frame(width: 76, height: 44)
+                    .background(PUColor.lime.opacity(canRedeemComp ? 1 : 0.35), in: .capsule)
+                    .buttonStyle(.plain)
+                    .disabled(!canRedeemComp)
+                    .accessibilityIdentifier("comp-code-apply")
+                }
+                if let compResult {
+                    Label(compResult.message,
+                          systemImage: compResult.isSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(PUFont.caption)
+                        .foregroundStyle(compResult.isSuccess ? PUColor.lime : PUColor.alert)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.vertical, 6)
+        } header: {
+            Text("Redeem Code")
+        } footer: {
+            Text(cloudAuth.isSignedIn
+                 ? "App Store offer codes open Apple's redemption sheet. Friend codes unlock free Pro on your Paddle Up account."
+                 : "App Store offer codes open Apple's redemption sheet. Friend codes need a Paddle Up Cloud sign-in (see Cloud below).")
+        }
+        .listRowBackground(PUColor.surface)
+    }
+
+    private var canRedeemComp: Bool {
+        !comp.isRedeeming && !compCode.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func redeemCompCode() {
+        guard canRedeemComp else { return }
+        compFieldFocused = false
+        Task {
+            let result = await comp.redeem(code: compCode)
+            withAnimation(.easeOut(duration: 0.2)) { compResult = result }
+            if result.isSuccess {
+                compCode = ""
+                Haptics.success()
+            } else {
+                Haptics.warning()
+            }
+        }
     }
 
     private var cloudSection: some View {

@@ -11,6 +11,11 @@
 //  The gating rules below (`canStartSession`, `sessionHistoryLimit`,
 //  `isLocked`) are unchanged — only what backs `isPro` is real now.
 //
+//  A friend comp code (see `CompAccessService`) also grants Pro while its
+//  entitlement is active. It sits alongside StoreKit, never replacing it.
+//  App Store offer codes are redeemed in Apple's own sheet and arrive as
+//  ordinary StoreKit transactions.
+//
 //  Requires `paddleup_pro_monthly` and `paddleup_pro_annual` to exist as
 //  auto-renewable subscriptions in App Store Connect for this bundle ID.
 //
@@ -107,10 +112,14 @@ final class StoreService {
     private let logger = Logger(subsystem: "app.paddleup", category: "store")
     private let productIDs: Set<String> = [PricingConfiguration.monthly.id, PricingConfiguration.annual.id]
 
-    /// True only while a verified, active Paddle Up Pro subscription exists
-    /// (or the developer override is on in a DEBUG build).
-    var isPro: Bool { hasVerifiedEntitlement || debugOverride }
+    /// True while a verified, active Paddle Up Pro subscription exists, a
+    /// friend comp grant is active, or the developer override is on in a
+    /// DEBUG build.
+    var isPro: Bool { hasVerifiedEntitlement || hasActiveComp || debugOverride }
     private(set) var hasVerifiedEntitlement = false
+    /// Free access from a friend comp code (entitlementSource "comp").
+    private(set) var compEntitlement: CompEntitlement?
+    var hasActiveComp: Bool { compEntitlement?.isActive() ?? false }
     private(set) var activeProductID: String?
     private(set) var expirationDate: Date?
     private(set) var willAutoRenew: Bool?
@@ -281,6 +290,19 @@ final class StoreService {
         if case .verified(let transaction) = update {
             await transaction.finish()
         }
+        await refreshEntitlements()
+    }
+
+    /// Set by `CompAccessService` from the server-confirmed (or cached) grant.
+    func applyComp(_ entitlement: CompEntitlement?) {
+        guard compEntitlement != entitlement else { return }
+        compEntitlement = entitlement
+    }
+
+    /// Called after Apple's offer-code sheet closes. The redeemed transaction
+    /// also arrives via `Transaction.updates`; this makes the UI reflect it
+    /// immediately.
+    func offerCodeRedemptionFinished() async {
         await refreshEntitlements()
     }
 

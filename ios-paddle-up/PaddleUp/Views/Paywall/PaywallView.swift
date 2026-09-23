@@ -3,6 +3,7 @@
 //  PaddleUp
 //
 
+import StoreKit
 import SwiftUI
 
 struct PaywallView: View {
@@ -13,6 +14,7 @@ struct PaywallView: View {
     @State private var selectedProductID: String = PricingConfiguration.annual.id
     @State private var message: String?
     @State private var showWelcome = false
+    @State private var showingOfferCodeSheet = false
 
     private var selectedProduct: SubscriptionProduct {
         store.products.first { $0.id == selectedProductID } ?? PricingConfiguration.annual
@@ -25,6 +27,16 @@ struct PaywallView: View {
                     hero
                     featureList
                     productPicker
+                    Button {
+                        showingOfferCodeSheet = true
+                    } label: {
+                        Label("Redeem Code", systemImage: "giftcard")
+                            .font(PUFont.caption)
+                            .foregroundStyle(PUColor.textSecondary)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("paywall-redeem-offer-code")
                     if let message {
                         Text(message)
                             .font(PUFont.caption)
@@ -56,6 +68,17 @@ struct PaywallView: View {
             .safeAreaInset(edge: .bottom) { purchaseBar }
         }
         .onAppear { appState.analytics.record(.paywallViewed) }
+        .offerCodeRedemption(isPresented: $showingOfferCodeSheet) { _ in
+            Task {
+                let wasPro = store.hasVerifiedEntitlement
+                await store.offerCodeRedemptionFinished()
+                if !wasPro, store.hasVerifiedEntitlement {
+                    appState.analytics.record(.subscriptionStarted, properties: ["product": "offer_code"])
+                    Haptics.success()
+                    showWelcome = true
+                }
+            }
+        }
         .fullScreenCover(isPresented: $showWelcome) {
             WelcomePremiumView(firstName: appState.profile.displayName) {
                 dismiss()
