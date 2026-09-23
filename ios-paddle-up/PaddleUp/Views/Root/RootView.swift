@@ -156,7 +156,6 @@ struct MainTabView: View {
                 .tag(Tab.profile)
         }
         .tint(PUColor.lime)
-        .environment(router)
         .fullScreenCover(item: Binding(
             get: { router.activeConfiguration },
             set: { router.activeConfiguration = $0 }
@@ -189,6 +188,10 @@ struct MainTabView: View {
                 }
             }
         }
+        // Must sit outside every cover/sheet above: presented content inherits the
+        // environment from where the presentation is attached, and the practice
+        // flow, summary and drill sheets all read PracticeRouter.
+        .environment(router)
         .onAppear {
             Haptics.enabled = appState.settings.hapticFeedback
             UITabBar.appearance().unselectedItemTintColor = UIColor(PUColor.textSecondary)
