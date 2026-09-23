@@ -79,6 +79,20 @@ struct PrivacyView: View {
             .listRowBackground(PUColor.surface)
 
             Section {
+                Toggle("Help improve scoring", isOn: Binding(
+                    get: { appState.settings.shareAnonymizedData },
+                    set: { value in appState.updateSettings { $0.shareAnonymizedData = value } }
+                ))
+                .tint(PUColor.lime)
+                .accessibilityIdentifier("share-anonymized-data")
+            } header: {
+                Text("Research sharing")
+            } footer: {
+                Text("Off by default. When on, new sessions and reps are marked as OK to include, anonymized, in future work to improve Paddle Up's scoring. Nothing is sent today, video is never included, and turning this off stops marking new records.")
+            }
+            .listRowBackground(PUColor.surface)
+
+            Section {
                 Button("Delete all saved clips", role: .destructive) { showingDeleteClips = true }
                 Button("Delete all practice data", role: .destructive) { showingDeleteSessions = true }
             } header: {

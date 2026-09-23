@@ -20,6 +20,13 @@ final class AppState {
     private(set) var data = AccountData()
     let analytics = Analytics()
 
+    /// Called after every local change is written, so the sync layer can push.
+    /// Set by the root view once cloud sync is wired.
+    var onLocalChange: (() -> Void)?
+
+    /// The account currently loaded, if any.
+    var currentAccountID: String? { accountID }
+
     var profile: PlayerProfile { data.profile }
     var settings: AppSettings { data.settings }
     var sessions: [SessionRecord] { data.sessions }
@@ -44,14 +51,35 @@ final class AppState {
         }
         if data.profile.displayName.isEmpty { data.profile.displayName = displayName }
         if data.profile.email.isEmpty { data.profile.email = email }
-        // Profiles saved before the new onboarding ran have no goal data; send
-        // them through onboarding again rather than personalising on nothing.
-        if data.profile.hasCompletedOnboarding && data.profile.goals.isEmpty {
+        // Profiles saved before the new onboarding ran have no level; send them
+        // through onboarding again rather than personalising on nothing.
+        if data.profile.hasCompletedOnboarding && data.profile.duprRange == nil {
             data.profile.hasCompletedOnboarding = false
         }
         analytics.isEnabled = data.settings.analyticsEnabled
         store.purgeExpiredClips(accountID: accountID, retentionDays: data.settings.clipRetentionDays)
-        persist()
+        store.save(data, accountID: accountID)
+    }
+
+    /// Replaces local data with a newer snapshot from the cloud (last write
+    /// wins). Clip filenames that don't exist on this device are dropped so the
+    /// replay falls back to the stored pose frames.
+    func applyRemote(_ remote: AccountData) {
+        guard let accountID else { return }
+        var incoming = PersistenceStore.migrate(remote)
+        for sessionIndex in incoming.sessions.indices {
+            for repIndex in incoming.sessions[sessionIndex].reps.indices {
+                if let clip = incoming.sessions[sessionIndex].reps[repIndex].clipFilename,
+                   let url = clipURL(for: clip), !FileManager.default.fileExists(atPath: url.path) {
+                    incoming.sessions[sessionIndex].reps[repIndex].clipFilename = nil
+                }
+            }
+        }
+        data = incoming
+        analytics.isEnabled = data.settings.analyticsEnabled
+        Haptics.enabled = data.settings.hapticFeedback
+        saveTask?.cancel()
+        store.save(data, accountID: accountID)
     }
 
     func unload() {
@@ -62,6 +90,7 @@ final class AppState {
 
     func deleteEverything() {
         guard let accountID else { return }
+        saveTask?.cancel()
         store.deleteAccount(accountID: accountID)
         data = AccountData()
     }
@@ -108,15 +137,18 @@ final class AppState {
 
     // MARK: - Persistence
 
-    /// Debounced write so rapid rep updates don't thrash the disk.
+    /// Debounced write so rapid rep updates don't thrash the disk. Every local
+    /// change stamps `modifiedAt`, which cloud sync uses for last-write-wins.
     private func persist() {
         guard let accountID else { return }
+        data.modifiedAt = .now
         saveTask?.cancel()
         let snapshot = data
-        saveTask = Task { [store] in
+        saveTask = Task { [store, weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
             store.save(snapshot, accountID: accountID)
+            self?.onLocalChange?()
         }
     }
 
@@ -144,15 +176,12 @@ final class AppState {
     /// nothing is lost if the app is killed mid-flow.
     func saveOnboardingDraft(_ answers: OnboardingAnswers) {
         if !answers.name.isEmpty { data.profile.displayName = answers.name }
-        data.profile.skillLevel = answers.level
+        if let range = answers.duprRange { data.profile.duprRange = range }
         data.profile.playerTypes = answers.playerTypes
         data.profile.frequency = answers.frequency
         data.profile.goals = answers.goals
         data.profile.struggles = answers.struggles
-        data.profile.weaknesses = answers.weaknesses
         data.profile.trainingTime = answers.trainingTime
-        data.profile.motivation = answers.motivation
-        data.profile.competitiveness = answers.competitiveness
         data.profile.successMetric = answers.successMetric
         persist()
     }
@@ -162,17 +191,14 @@ final class AppState {
     func completeOnboarding(_ answers: OnboardingAnswers) {
         saveOnboardingDraft(answers)
         data.profile.hasCompletedOnboarding = true
-        data.plan = GamePlanEngine.weeklyPlan(from: answers)
+        data.plan = buildPlan()
         analytics.record(.onboardingComplete, properties: [
-            "level": answers.level.rawValue,
+            "duprRange": answers.duprRange?.rawValue ?? "",
             "playerTypes": answers.playerTypes.map(\.rawValue).joined(separator: ","),
             "frequency": answers.frequency.rawValue,
             "goals": answers.goals.map(\.rawValue).joined(separator: ","),
             "struggles": answers.struggles.map(\.rawValue).joined(separator: ","),
-            "weaknesses": answers.weaknesses.map(\.rawValue).joined(separator: ","),
             "time": answers.trainingTime.rawValue,
-            "motivation": answers.motivation?.rawValue ?? "",
-            "competitiveness": answers.competitiveness?.rawValue ?? "",
             "successMetric": answers.successMetric?.rawValue ?? ""
         ])
         persist()
@@ -180,7 +206,14 @@ final class AppState {
 
     // MARK: - Sessions
 
-    func save(session: SessionRecord) {
+    func save(session incoming: SessionRecord) {
+        // Consent flags are stamped from the current setting when a record is
+        // first seen, and never cleared retroactively by this path.
+        var session = incoming
+        if data.settings.shareAnonymizedData {
+            session.sharedForResearch = true
+            for index in session.reps.indices { session.reps[index].sharedForResearch = true }
+        }
         if let index = data.sessions.firstIndex(where: { $0.id == session.id }) {
             data.sessions[index] = session
         } else {
@@ -203,7 +236,7 @@ final class AppState {
         }
 
         awardAchievements(for: session)
-        regeneratePlanIfNeeded()
+        regeneratePlanIfNeeded(afterSession: session)
         persist()
     }
 
@@ -441,13 +474,16 @@ final class AppState {
         persist()
     }
 
-    private func regeneratePlanIfNeeded() {
+    private func regeneratePlanIfNeeded(afterSession session: SessionRecord) {
         guard let plan = data.plan else {
             data.plan = buildPlan()
             return
         }
-        // Refresh weekly, or whenever the plan's assumptions go stale.
-        if Date().timeIntervalSince(plan.generatedAt) > 7 * 86_400 {
+        // Refresh weekly, or as soon as the first completed session gives the
+        // plan real measured data to replace the level-only starter week.
+        let isFirstMeasuredSession = session.endedAt != nil && completedSessions.count == 1
+            && completedSessions.first?.id == session.id
+        if Date().timeIntervalSince(plan.generatedAt) > 7 * 86_400 || isFirstMeasuredSession {
             data.plan = buildPlan()
         }
     }
@@ -460,64 +496,26 @@ final class AppState {
         persist()
     }
 
-    /// Builds a four-day week around the player's real weaknesses, ending in an
-    /// assessment so improvement can actually be measured.
+    /// Measured weak spots from real reps, most important first: recurring
+    /// issues across sessions, then each recent session's weakest mechanic.
+    private var measuredFocus: [MeasuredFocus] {
+        var focus: [MeasuredFocus] = recurringWeaknesses.prefix(3).map {
+            MeasuredFocus(shot: $0.shot, mechanic: $0.mechanic)
+        }
+        for session in completedSessions.prefix(4) {
+            guard let weakest = session.weakestMechanic else { continue }
+            let candidate = MeasuredFocus(shot: session.shot, mechanic: weakest.mechanic)
+            if !focus.contains(candidate) { focus.append(candidate) }
+        }
+        return focus
+    }
+
+    /// Builds the week from the DUPR range plus measured practice data.
     private func buildPlan() -> WeeklyPlan {
-        var weaknesses: [(shot: ShotType, mechanic: MechanicID)] = recurringWeaknesses
-            .prefix(3)
-            .map { ($0.shot, $0.mechanic) }
-
-        if weaknesses.count < 3 {
-            for session in completedSessions.prefix(4) {
-                guard let weakest = session.weakestMechanic else { continue }
-                let candidate = (session.shot, weakest.mechanic)
-                if !weaknesses.contains(where: { $0.shot == candidate.0 && $0.mechanic == candidate.1 }) {
-                    weaknesses.append((candidate.0, candidate.1))
-                }
-                if weaknesses.count == 3 { break }
-            }
+        let lead = recurringWeaknesses.first.map {
+            "\($0.mechanic.displayName.lowercased()) on the \($0.shot.group.displayName.lowercased())"
         }
-
-        if weaknesses.isEmpty {
-            weaknesses = [
-                (.forehandDink, .contactPosition),
-                (.forehandDink, .kneeBend),
-                (.backhandDink, .contactPosition)
-            ]
-        }
-        while weaknesses.count < 3 {
-            weaknesses.append(weaknesses[weaknesses.count % max(1, weaknesses.count)])
-        }
-
-        // Monday / Wednesday / Friday work, Sunday assessment.
-        let weekdays = [2, 4, 6]
-        var entries: [WeeklyPlan.Entry] = zip(weekdays, weaknesses).map { weekday, weakness in
-            WeeklyPlan.Entry(
-                weekday: weekday,
-                shot: weakness.shot,
-                mechanic: weakness.mechanic,
-                drillID: DrillLibrary.drill(for: weakness.mechanic, shot: weakness.shot)?.id
-                    ?? DrillLibrary.all[0].id
-            )
-        }
-
-        let assessmentShot = weaknesses.first?.shot ?? .forehandDink
-        entries.append(WeeklyPlan.Entry(
-            weekday: 1,
-            shot: assessmentShot,
-            mechanic: weaknesses.first?.mechanic ?? .contactPosition,
-            drillID: DrillLibrary.drills(for: assessmentShot).first?.id ?? DrillLibrary.all[0].id,
-            isAssessment: true
-        ))
-
-        let rationale: String
-        if let first = recurringWeaknesses.first {
-            rationale = "Built around your recurring \(first.mechanic.displayName.lowercased()) issue on the \(first.shot.group.displayName.lowercased()), with a Sunday assessment to measure whether it moved."
-        } else {
-            rationale = "A starter week focused on dink fundamentals, ending with an assessment so Paddle Up can measure your baseline."
-        }
-
-        return WeeklyPlan(generatedAt: .now, entries: entries, rationale: rationale)
+        return GamePlanEngine.weeklyPlan(profile: profile, measured: measuredFocus, leadInsight: lead)
     }
 
     // MARK: - Achievements

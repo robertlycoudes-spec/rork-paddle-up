@@ -4,7 +4,7 @@
  */
 
 import type { MechanicID } from "./mechanics";
-import type { SkillLevel } from "./profile";
+import type { DuprRange } from "./profile";
 import { groupOf, type ShotType } from "./shots";
 
 export interface Drill {
@@ -13,7 +13,7 @@ export interface Drill {
   shot: ShotType;
   /** The mechanic this drill is designed to move. */
   targetMechanic: MechanicID;
-  minimumLevel: SkillLevel;
+  minimumLevel: DuprRange;
   goal: string;
   instructions: string[];
   sets: number;

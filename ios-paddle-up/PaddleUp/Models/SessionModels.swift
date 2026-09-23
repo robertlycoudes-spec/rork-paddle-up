@@ -8,25 +8,68 @@
 
 import Foundation
 
-nonisolated enum SkillLevel: String, Codable, CaseIterable, Sendable, Identifiable {
-    case justStarting, beginner, intermediate, advanced, competitive
+/// The player's level as a DUPR band. One selector serves both audiences:
+/// players who know their DUPR pick the band it falls in; players who don't
+/// pick by the plain-language label. Only the band is stored — never a
+/// precise rating.
+nonisolated enum DuprRange: String, Codable, CaseIterable, Sendable, Identifiable, Comparable {
+    case beginner, lowerIntermediate, intermediate, upperIntermediate, advanced, advancedPlus, pro
     nonisolated var id: String { rawValue }
-    var displayName: String {
+
+    /// The DUPR band, e.g. "3.0–3.49".
+    var rangeLabel: String {
         switch self {
-        case .justStarting: return "Just Starting"
-        case .beginner: return "Beginner"
-        case .intermediate: return "Intermediate"
-        case .advanced: return "Advanced"
-        case .competitive: return "Competitive"
+        case .beginner: return "2.0–2.49"
+        case .lowerIntermediate: return "2.5–2.99"
+        case .intermediate: return "3.0–3.49"
+        case .upperIntermediate: return "3.5–3.99"
+        case .advanced: return "4.0–4.49"
+        case .advancedPlus: return "4.5–4.99"
+        case .pro: return "5.0+"
         }
     }
+
+    /// The plain-language label for players who don't know their DUPR.
+    var displayName: String {
+        switch self {
+        case .beginner: return "Beginner"
+        case .lowerIntermediate: return "Lower Intermediate"
+        case .intermediate: return "Intermediate"
+        case .upperIntermediate: return "Upper Intermediate"
+        case .advanced: return "Advanced"
+        case .advancedPlus: return "Advanced+"
+        case .pro: return "Pro"
+        }
+    }
+
     var detail: String {
         switch self {
-        case .justStarting: return "First season — learning how the game flows"
-        case .beginner: return "New to pickleball or still learning the basics"
-        case .intermediate: return "Comfortable rallying, working on consistency"
-        case .advanced: return "Strong kitchen game, playing regularly"
-        case .competitive: return "Tournament player chasing marginal gains"
+        case .beginner: return "Learning the rules, the serve and keeping a rally going"
+        case .lowerIntermediate: return "Rallying comfortably, starting to play at the kitchen"
+        case .intermediate: return "Dinking with control, working on the third shot"
+        case .upperIntermediate: return "Consistent drops and resets, playing with intent"
+        case .advanced: return "Strong hands battles, attacking the right balls"
+        case .advancedPlus: return "Tournament-level consistency under pressure"
+        case .pro: return "Competing at the top of the sport"
+        }
+    }
+
+    /// Full label used in settings and summaries: "3.0–3.49 · Intermediate".
+    var fullLabel: String { "\(rangeLabel) · \(displayName)" }
+
+    private var order: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+
+    static func < (lhs: DuprRange, rhs: DuprRange) -> Bool { lhs.order < rhs.order }
+
+    /// Maps the retired five-step skill level onto the nearest DUPR band so
+    /// profiles saved before schema v2 keep a sensible level.
+    static func migrating(legacySkillLevel raw: String) -> DuprRange? {
+        switch raw {
+        case "justStarting", "beginner": return .beginner
+        case "intermediate": return .intermediate
+        case "advanced": return .upperIntermediate
+        case "competitive": return .advanced
+        default: return nil
         }
     }
 }
@@ -55,74 +98,6 @@ nonisolated enum PlayerStyle: String, Codable, CaseIterable, Sendable, Identifia
         case .athletic: return "hare.fill"
         case .strategic: return "brain.head.profile"
         case .figuringOut: return "questionmark.circle"
-        }
-    }
-}
-
-/// The shots or skills the player names as their weakest. Multi-select;
-/// this is the most specific signal the plan engine gets.
-nonisolated enum BiggestWeakness: String, Codable, CaseIterable, Sendable, Identifiable {
-    case serve, returnShot, dinking, thirdShotDrop, drive, volley, lob, footwork, strategy, mentalGame
-    nonisolated var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .serve: return "Serve"
-        case .returnShot: return "Return"
-        case .dinking: return "Dinking"
-        case .thirdShotDrop: return "Third-shot drop"
-        case .drive: return "Drive"
-        case .volley: return "Volley"
-        case .lob: return "Lob"
-        case .footwork: return "Footwork"
-        case .strategy: return "Strategy"
-        case .mentalGame: return "Mental game"
-        }
-    }
-    /// How the weakness reads inside the "biggest opportunity" headline.
-    var focusName: String {
-        switch self {
-        case .serve: return "Serve"
-        case .returnShot: return "Return"
-        case .dinking: return "Dinking"
-        case .thirdShotDrop: return "Third-shot drops"
-        case .drive: return "Drives"
-        case .volley: return "Volleys"
-        case .lob: return "Lob defence"
-        case .footwork: return "Footwork"
-        case .strategy: return "Strategy"
-        case .mentalGame: return "Mental game"
-        }
-    }
-}
-
-/// How seriously the player competes. Single-select; scales training volume.
-nonisolated enum Competitiveness: String, Codable, CaseIterable, Sendable, Identifiable {
-    case fun, recreational, veryCompetitive, league, tournament
-    nonisolated var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .fun: return "Just here for fun"
-        case .recreational: return "Recreational"
-        case .veryCompetitive: return "Very competitive"
-        case .league: return "League player"
-        case .tournament: return "Tournament player"
-        }
-    }
-    /// Multiplies the prescribed rep counts.
-    var repScale: Double {
-        switch self {
-        case .fun: return 0.85
-        case .recreational: return 1.0
-        case .veryCompetitive: return 1.1
-        case .league: return 1.15
-        case .tournament: return 1.25
-        }
-    }
-    /// True when the plan should include scored, pressure-style work.
-    var wantsPressureWork: Bool {
-        switch self {
-        case .fun, .recreational: return false
-        case .veryCompetitive, .league, .tournament: return true
         }
     }
 }
@@ -238,23 +213,6 @@ nonisolated enum WeeklyTrainingTime: String, Codable, CaseIterable, Sendable, Id
     }
 }
 
-/// Why the player is training — used to tune the tone of the plan.
-nonisolated enum TrainingMotivation: String, Codable, CaseIterable, Sendable, Identifiable {
-    case confidence, beatFriends, improveDUPR, winMore, tournaments, competitivePlayer, fun
-    nonisolated var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .confidence: return "Play more confidently"
-        case .beatFriends: return "Beat my friends"
-        case .improveDUPR: return "Improve my DUPR"
-        case .winMore: return "Win more games"
-        case .tournaments: return "Prepare for tournaments"
-        case .competitivePlayer: return "Become a competitive player"
-        case .fun: return "Just have more fun playing"
-        }
-    }
-}
-
 nonisolated enum PlayFrequency: String, Codable, CaseIterable, Sendable, Identifiable {
     case rarely, weekly, fewTimesWeek, daily
     nonisolated var id: String { rawValue }
@@ -272,15 +230,13 @@ nonisolated enum PlayFrequency: String, Codable, CaseIterable, Sendable, Identif
 nonisolated struct PlayerProfile: Codable, Sendable, Equatable {
     var displayName: String = ""
     var email: String = ""
-    var skillLevel: SkillLevel = .intermediate
+    /// The selected DUPR band. `nil` until the player picks one.
+    var duprRange: DuprRange?
     var handedness: Handedness = .right
     var playerTypes: [PlayerStyle] = []
     var goals: [TrainingGoal] = []
     var struggles: [BiggestStruggle] = []
-    var weaknesses: [BiggestWeakness] = []
     var trainingTime: WeeklyTrainingTime = .moderate
-    var motivation: TrainingMotivation?
-    var competitiveness: Competitiveness?
     var successMetric: SuccessMetric?
     var frequency: PlayFrequency = .weekly
     var heightCentimetres: Int = 178
@@ -297,29 +253,25 @@ nonisolated struct PlayerProfile: Codable, Sendable, Equatable {
 
 extension PlayerProfile {
     nonisolated enum CodingKeys: String, CodingKey {
-        case displayName, email, skillLevel, handedness, playerTypes, goals, struggles
-        case weaknesses
+        case displayName, email, duprRange, handedness, playerTypes, goals, struggles
+        case skillLevel // legacy five-step level, migrated to duprRange in schema v2
         case playerType // legacy single-select key from before multi-select
-        case weakness // legacy single-select key from before multi-select
-        case trainingTime, motivation, competitiveness, successMetric, frequency
+        case trainingTime, successMetric, frequency
         case heightCentimetres, hasCompletedOnboarding, hasCompletedBaselineAssessment, createdAt
     }
 
-    // Encoded manually because CodingKeys includes the legacy `weakness` case,
-    // which blocks synthesized Encodable conformance.
+    // Encoded manually because CodingKeys includes legacy read-only keys,
+    // which block synthesized Encodable conformance.
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(email, forKey: .email)
-        try container.encode(skillLevel, forKey: .skillLevel)
+        try container.encodeIfPresent(duprRange, forKey: .duprRange)
         try container.encode(handedness, forKey: .handedness)
         try container.encode(playerTypes, forKey: .playerTypes)
         try container.encode(goals, forKey: .goals)
         try container.encode(struggles, forKey: .struggles)
-        try container.encode(weaknesses, forKey: .weaknesses)
         try container.encode(trainingTime, forKey: .trainingTime)
-        try container.encodeIfPresent(motivation, forKey: .motivation)
-        try container.encodeIfPresent(competitiveness, forKey: .competitiveness)
         try container.encodeIfPresent(successMetric, forKey: .successMetric)
         try container.encode(frequency, forKey: .frequency)
         try container.encode(heightCentimetres, forKey: .heightCentimetres)
@@ -330,24 +282,22 @@ extension PlayerProfile {
 
     /// Tolerant decoding: profiles saved by earlier versions of the app (with
     /// different profile fields) still load, missing fields fall back to defaults.
+    /// Retired fields (weaknesses, motivation, competitiveness) are ignored.
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         email = try container.decodeIfPresent(String.self, forKey: .email) ?? ""
-        skillLevel = try container.decodeIfPresent(SkillLevel.self, forKey: .skillLevel) ?? .intermediate
+        let legacyLevel = (try? container.decodeIfPresent(String.self, forKey: .skillLevel)) ?? nil
+        let storedRange: DuprRange? = (try? container.decodeIfPresent(DuprRange.self, forKey: .duprRange)) ?? nil
+        duprRange = storedRange ?? legacyLevel.flatMap(DuprRange.migrating(legacySkillLevel:))
         handedness = try container.decodeIfPresent(Handedness.self, forKey: .handedness) ?? .right
         let legacyPlayerType = (try? container.decodeIfPresent(PlayerStyle.self, forKey: .playerType)) ?? nil
         playerTypes = try container.decodeIfPresent([PlayerStyle].self, forKey: .playerTypes)
             ?? legacyPlayerType.map { [$0] } ?? []
         goals = try container.decodeIfPresent([TrainingGoal].self, forKey: .goals) ?? []
         struggles = try container.decodeIfPresent([BiggestStruggle].self, forKey: .struggles) ?? []
-        let legacyWeakness = (try? container.decodeIfPresent(BiggestWeakness.self, forKey: .weakness)) ?? nil
-        weaknesses = try container.decodeIfPresent([BiggestWeakness].self, forKey: .weaknesses)
-            ?? legacyWeakness.map { [$0] } ?? []
         trainingTime = try container.decodeIfPresent(WeeklyTrainingTime.self, forKey: .trainingTime) ?? .moderate
-        motivation = try container.decodeIfPresent(TrainingMotivation.self, forKey: .motivation)
-        competitiveness = try container.decodeIfPresent(Competitiveness.self, forKey: .competitiveness)
-        successMetric = try container.decodeIfPresent(SuccessMetric.self, forKey: .successMetric)
+        successMetric = (try? container.decodeIfPresent(SuccessMetric.self, forKey: .successMetric)) ?? nil
         frequency = try container.decodeIfPresent(PlayFrequency.self, forKey: .frequency) ?? .weekly
         heightCentimetres = try container.decodeIfPresent(Int.self, forKey: .heightCentimetres) ?? 178
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
@@ -396,7 +346,65 @@ nonisolated struct RepRecord: Codable, Sendable, Identifiable, Equatable {
     var rubricVersion: Int = 1
     var benchmarkVersion: String = BenchmarkLibrary.version
 
+    // MARK: Ball & paddle data — reserved, not yet measured.
+    // Paddle Up only measures the body today. These stay `nil` until ball and
+    // paddle tracking exists; nothing in the app estimates or fills them.
+
+    /// Ball speed off the paddle, in mph.
+    var ballSpeedMPH: Double?
+    /// Ball spin, in revolutions per minute.
+    var spinRPM: Double?
+    /// Paddle face angle at contact, in degrees from vertical.
+    var paddleFaceAngleDegrees: Double?
+    /// How close contact was to the ideal moment, in milliseconds (lower is better).
+    var contactTimingPrecisionMS: Double?
+
+    /// True when the player had opted in to share anonymized data at the time
+    /// this rep was recorded. Only flags the record — nothing is sent anywhere.
+    var sharedForResearch: Bool = false
+
     func mechanic(_ id: MechanicID) -> MechanicScore? { mechanics.first { $0.mechanic == id } }
+}
+
+extension RepRecord {
+    nonisolated enum CodingKeys: String, CodingKey {
+        case id, sessionID, index, timestamp, shot, score, mechanics, dominantIssue, issueID
+        case correction, nextRepCue, recommendedDrillID, confidence, isDeleted, wasReclassified
+        case clipFilename, poseFrames, rubricVersion, benchmarkVersion
+        case ballSpeedMPH, spinRPM, paddleFaceAngleDegrees, contactTimingPrecisionMS
+        case sharedForResearch
+    }
+
+    /// Tolerant decoding so reps saved before schema v2 (without the reserved
+    /// ball/paddle fields or the consent flag) still load.
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        sessionID = try container.decode(UUID.self, forKey: .sessionID)
+        index = try container.decode(Int.self, forKey: .index)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        shot = try container.decode(ShotType.self, forKey: .shot)
+        score = try container.decode(Double.self, forKey: .score)
+        mechanics = try container.decodeIfPresent([MechanicScore].self, forKey: .mechanics) ?? []
+        dominantIssue = try container.decodeIfPresent(MechanicID.self, forKey: .dominantIssue)
+        issueID = try container.decodeIfPresent(String.self, forKey: .issueID)
+        correction = try container.decodeIfPresent(String.self, forKey: .correction) ?? ""
+        nextRepCue = try container.decodeIfPresent(String.self, forKey: .nextRepCue) ?? ""
+        recommendedDrillID = try container.decodeIfPresent(String.self, forKey: .recommendedDrillID)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0
+        isDeleted = try container.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
+        wasReclassified = try container.decodeIfPresent(Bool.self, forKey: .wasReclassified) ?? false
+        clipFilename = try container.decodeIfPresent(String.self, forKey: .clipFilename)
+        poseFrames = try container.decodeIfPresent([PoseFrame].self, forKey: .poseFrames) ?? []
+        rubricVersion = try container.decodeIfPresent(Int.self, forKey: .rubricVersion) ?? 1
+        benchmarkVersion = try container.decodeIfPresent(String.self, forKey: .benchmarkVersion)
+            ?? BenchmarkLibrary.version
+        ballSpeedMPH = try container.decodeIfPresent(Double.self, forKey: .ballSpeedMPH)
+        spinRPM = try container.decodeIfPresent(Double.self, forKey: .spinRPM)
+        paddleFaceAngleDegrees = try container.decodeIfPresent(Double.self, forKey: .paddleFaceAngleDegrees)
+        contactTimingPrecisionMS = try container.decodeIfPresent(Double.self, forKey: .contactTimingPrecisionMS)
+        sharedForResearch = try container.decodeIfPresent(Bool.self, forKey: .sharedForResearch) ?? false
+    }
 }
 
 nonisolated enum SessionMode: String, Codable, Sendable {
@@ -423,6 +431,9 @@ nonisolated struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
     var reps: [RepRecord] = []
     /// Cue the player was asked to focus on during this session.
     var focusCue: String?
+    /// True when the player had opted in to share anonymized data when this
+    /// session was recorded. Only flags the record — nothing is sent anywhere.
+    var sharedForResearch: Bool = false
 
     var activeReps: [RepRecord] { reps.filter { !$0.isDeleted } }
 
@@ -470,6 +481,26 @@ nonisolated struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
 
     var weakestMechanic: (mechanic: MechanicID, score: Double)? {
         orderedMechanicAverages.min { $0.score < $1.score }
+    }
+}
+
+extension SessionRecord {
+    nonisolated enum CodingKeys: String, CodingKey {
+        case id, startedAt, endedAt, shot, mode, drillID, reps, focusCue, sharedForResearch
+    }
+
+    /// Tolerant decoding so sessions saved before schema v2 still load.
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        shot = try container.decode(ShotType.self, forKey: .shot)
+        mode = try container.decode(SessionMode.self, forKey: .mode)
+        drillID = try container.decodeIfPresent(String.self, forKey: .drillID)
+        reps = try container.decodeIfPresent([RepRecord].self, forKey: .reps) ?? []
+        focusCue = try container.decodeIfPresent(String.self, forKey: .focusCue)
+        sharedForResearch = try container.decodeIfPresent(Bool.self, forKey: .sharedForResearch) ?? false
     }
 }
 

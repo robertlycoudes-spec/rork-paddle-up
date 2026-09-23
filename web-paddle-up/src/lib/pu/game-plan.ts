@@ -1,30 +1,35 @@
 /**
- * Turns onboarding answers into a personalised game plan: the player's biggest
- * opportunity, a this-week prescription, and a weekly plan wired to the real
- * drill library. Deterministic and pure — the same answers always produce the
- * same plan, so the "AI result" is reproducible and testable.
+ * Builds the player's game plan. Two inputs drive it:
+ *
+ *   1. The player's DUPR range — sets the starting curriculum, drill
+ *      difficulty and training volume.
+ *   2. Measured practice data — once sessions exist, the mechanics that
+ *      actually score lowest take over the plan's lead slots.
+ *
+ * The remaining onboarding answers (style, goals, struggles, weekly time,
+ * success metric) only fine-tune volume and add extra plan lines; they never
+ * choose the core focus. A brand-new player with no sessions gets the
+ * curriculum for their range. Deterministic and pure — mirrors the iOS
+ * GamePlanEngine exactly.
  */
 
 import { allDrills, drillForMechanic, drillsForShot } from "./drills";
 import type { MechanicID } from "./mechanics";
 import {
-  competitivenessRepScale,
+  duprFullLabel,
+  duprOrder,
+  duprRangeOption,
   practiceDaysPerWeek,
   trainingGoalName,
   trainingTimeRepScale,
-  weaknessFocusName,
-  wantsPressureWork,
   weeklyMinutesFor,
   type BiggestStruggle,
-  type BiggestWeakness,
-  type Competitiveness,
+  type DuprRange,
   type PlayerProfile,
   type PlayerStyle,
   type PlayFrequency,
-  type SkillLevel,
   type SuccessMetric,
   type TrainingGoal,
-  type TrainingMotivation,
   type WeeklyTrainingTime,
 } from "./profile";
 import type { ShotType } from "./shots";
@@ -32,27 +37,23 @@ import type { ShotType } from "./shots";
 /** Everything the onboarding flow collects, in order. */
 export interface OnboardingAnswers {
   name: string;
-  level: SkillLevel;
+  /** Undefined until the player picks a range. */
+  duprRange?: DuprRange;
   playerTypes: PlayerStyle[];
   frequency: PlayFrequency;
   goals: TrainingGoal[];
   struggles: BiggestStruggle[];
-  weaknesses: BiggestWeakness[];
   trainingTime: WeeklyTrainingTime;
-  motivation?: TrainingMotivation;
-  competitiveness?: Competitiveness;
   successMetric?: SuccessMetric;
 }
 
 export function emptyAnswers(): OnboardingAnswers {
   return {
     name: "",
-    level: "intermediate",
     playerTypes: [],
     frequency: "weekly",
     goals: [],
     struggles: [],
-    weaknesses: [],
     trainingTime: "moderate",
   };
 }
@@ -95,6 +96,12 @@ export interface WeeklyPlan {
   rationale: string;
 }
 
+/** A measured weak spot from real reps. */
+export interface MeasuredFocus {
+  shot: ShotType;
+  mechanic: MechanicID;
+}
+
 export const weekdayNames = [
   "Sunday",
   "Monday",
@@ -105,33 +112,76 @@ export const weekdayNames = [
   "Saturday",
 ];
 
-/**
- * Weaknesses that map onto a trainable shot skill. Lob and mental game return
- * null and get their own dedicated plan lines instead.
- */
-export function weaknessGoal(weakness: BiggestWeakness): TrainingGoal | null {
-  switch (weakness) {
-    case "serve":
-      return "serve";
-    case "returnShot":
-      return "returnOfServe";
-    case "dinking":
-      return "dinking";
-    case "thirdShotDrop":
-      return "thirdShotDrops";
-    case "drive":
-      return "drives";
-    case "volley":
-      return "volleys";
-    case "footwork":
-      return "speedReaction";
-    case "strategy":
-      return "strategyIQ";
-    case "lob":
-    case "mentalGame":
-      return null;
+/** Range used when a player has not picked one (legacy profiles only). */
+export const DEFAULT_RANGE: DuprRange = "lowerIntermediate";
+
+// MARK: - Level curriculum
+
+/** The skills a player in this range should build first, in priority order. */
+export function curriculumFor(range: DuprRange): TrainingGoal[] {
+  switch (range) {
+    case "beginner":
+      return ["consistency", "dinking", "serve"];
+    case "lowerIntermediate":
+      return ["dinking", "consistency", "returnOfServe"];
+    case "intermediate":
+      return ["thirdShotDrops", "dinking", "consistency"];
+    case "upperIntermediate":
+      return ["thirdShotDrops", "volleys", "dinking"];
+    case "advanced":
+      return ["volleys", "thirdShotDrops", "drives"];
+    case "advancedPlus":
+      return ["volleys", "drives", "speedReaction"];
+    case "pro":
+      return ["speedReaction", "volleys", "drives"];
   }
 }
+
+/** Multiplies prescribed rep counts: newer players start lighter. */
+export function volumeScaleFor(range: DuprRange): number {
+  switch (range) {
+    case "beginner":
+      return 0.7;
+    case "lowerIntermediate":
+      return 0.85;
+    case "intermediate":
+      return 1.0;
+    case "upperIntermediate":
+      return 1.1;
+    case "advanced":
+      return 1.2;
+    case "advancedPlus":
+      return 1.3;
+    case "pro":
+      return 1.4;
+  }
+}
+
+/** Advanced ranges rehearse pressure, not just technique. */
+export function wantsPressureWork(range: DuprRange): boolean {
+  return duprOrder(range) >= duprOrder("advanced");
+}
+
+function levelNarrative(range: DuprRange): string {
+  switch (range) {
+    case "beginner":
+      return "At 2.0–2.49 the fastest gains come from keeping the ball in play. We'll build a repeatable contact point and a reliable serve before anything else.";
+    case "lowerIntermediate":
+      return "At 2.5–2.99 points are won and lost at the kitchen. We'll build a controlled dink and a deep return so you can get there and stay there.";
+    case "intermediate":
+      return "At 3.0–3.49 the third shot decides whether you reach the kitchen at all. We'll build your drop on top of a steady dink.";
+    case "upperIntermediate":
+      return "At 3.5–3.99 the gap is consistency under pace — clean drops, quiet hands at the line, and volleys that don't pop up.";
+    case "advanced":
+      return "At 4.0–4.49 hands battles and shot selection decide games. We'll sharpen your volleys and keep your drop reliable when it matters.";
+    case "advancedPlus":
+      return "At 4.5–4.99 the margins are small. We'll tighten your volley shape, add depth to your drives and speed up your first step.";
+    case "pro":
+      return "At 5.0+ every rep is about marginal gains — reaction speed, a stable paddle in fast exchanges and drives with intent.";
+  }
+}
+
+// MARK: - Onboarding result
 
 /**
  * Struggles that don't map to a shot skill (conditioning, direction) return
@@ -157,23 +207,9 @@ export function struggleGoal(struggle: BiggestStruggle): TrainingGoal | null {
   }
 }
 
-/**
- * Goals ranked by priority: the named weakness leads (it is the most specific
- * answer the player gives), then struggles (their own pain), then stated goals.
- */
+/** The core focus areas: the range's curriculum. */
 export function focusAreas(answers: OnboardingAnswers): TrainingGoal[] {
-  const fromWeakness = answers.weaknesses
-    .map(weaknessGoal)
-    .filter((goal): goal is TrainingGoal => goal !== null);
-  const fromStruggles = answers.struggles
-    .map(struggleGoal)
-    .filter((goal): goal is TrainingGoal => goal !== null);
-
-  const merged: TrainingGoal[] = [];
-  for (const goal of [...fromWeakness, ...fromStruggles, ...answers.goals]) {
-    if (!merged.includes(goal)) merged.push(goal);
-  }
-  return merged.length === 0 ? ["consistency"] : merged;
+  return curriculumFor(answers.duprRange ?? DEFAULT_RANGE);
 }
 
 /** Scales a rep count and rounds to a clean, credible number. */
@@ -243,23 +279,6 @@ function prescriptionItem(goal: TrainingGoal, scale: number): GamePlanItem {
   }
 }
 
-/** Dedicated line for a weakness that isn't a measurable shot skill yet. */
-function weaknessItem(weakness: BiggestWeakness, scale: number): GamePlanItem {
-  switch (weakness) {
-    case "lob":
-      return makeItem(
-        "Overhead & lob defence reps",
-        scaled(20, scale),
-        "reps",
-        "ArrowUpRight",
-      );
-    case "mentalGame":
-      return makeItem("Pressure reps — play to a score", 3, "sessions", "Brain");
-    default:
-      return prescriptionItem(weaknessGoal(weakness) ?? "consistency", scale);
-  }
-}
-
 /** A counterweight line chosen from one of the player's self-described styles. */
 function styleItem(style: PlayerStyle, scale: number): GamePlanItem {
   switch (style) {
@@ -273,12 +292,7 @@ function styleItem(style: PlayerStyle, scale: number): GamePlanItem {
     case "defensive":
       return makeItem("Attack the short ball", scaled(20, scale), "reps", "Zap");
     case "consistent":
-      return makeItem(
-        "Streak challenges — 10 clean in a row",
-        5,
-        "sets",
-        "Repeat",
-      );
+      return makeItem("Streak challenges — 10 clean in a row", 5, "sets", "Repeat");
     case "athletic":
       return makeItem(
         "Footwork & conditioning",
@@ -295,31 +309,6 @@ function styleItem(style: PlayerStyle, scale: number): GamePlanItem {
         "sessions",
         "AudioWaveform",
       );
-  }
-}
-
-function weaknessDetail(weakness: BiggestWeakness): string {
-  switch (weakness) {
-    case "serve":
-      return "You named your serve — the one shot nobody can rush. We'll make it repeatable before we make it bigger.";
-    case "returnShot":
-      return "You named your return. A deep return buys you the kitchen, and it's the fastest gain most players skip.";
-    case "dinking":
-      return "You named your dinks. Kitchen points reward patience and placement, so we'll build your soft game first.";
-    case "thirdShotDrop":
-      return "You named your third-shot drop — the shot that decides whether you reach the kitchen at all.";
-    case "drive":
-      return "You named your drive. Depth and shape come before pace, or the ball just comes back faster.";
-    case "volley":
-      return "You named your volleys. Holding the line under pressure starts with a stable paddle and a short punch.";
-    case "lob":
-      return "You named the lob. Reading it early and turning under the ball turns a scramble into an easy overhead.";
-    case "footwork":
-      return "You named your footwork. Almost every technique fault is really a position fault one step earlier.";
-    case "strategy":
-      return "You named strategy. Shot selection beats shot-making at every level, so we'll train your decisions.";
-    case "mentalGame":
-      return "You named the mental game. We'll train it the only way it improves: scored reps where the pressure is real.";
   }
 }
 
@@ -359,151 +348,60 @@ function successClause(metric: SuccessMetric): string {
   }
 }
 
-function opportunityDetail(goal: TrainingGoal): string {
-  switch (goal) {
-    case "consistency":
-      return "Unforced errors decide more amateur games than winners do. We'll tighten your contact point first.";
-    case "serve":
-      return "The only shot you fully control. A repeatable serve starts every point on your terms.";
-    case "returnOfServe":
-      return "A deep return buys you the kitchen. It's the fastest rating gain most players ignore.";
-    case "dinking":
-      return "Kitchen points are won by patience and placement, not power. We'll build your soft game.";
-    case "thirdShotDrops":
-      return "Your third shot decides whether you reach the kitchen — we'll build it rep by rep.";
-    case "drives":
-      return "Penetrating drives create weak replies you can attack. Depth targets first.";
-    case "volleys":
-      return "Clean volleys let you hold the line under pressure. We'll keep your shape stable.";
-    case "speedReaction":
-      return "First-step quickness wins the tight exchanges. Short, sharp footwork blocks.";
-    case "strategyIQ":
-      return "Shot selection beats shot-making at every level. We'll train your decisions.";
-    case "competitive":
-      return "Competitors rehearse pressure. Your plan mixes skills with scored, game-like reps.";
-  }
-}
-
-/**
- * Builds the "why this matters" paragraph out of the player's own answers:
- * their weakness, their style, and their definition of success.
- */
-function detailNarrative(
-  answers: OnboardingAnswers,
-  primary: TrainingGoal,
-): string {
-  const sentences: string[] = [];
-
-  if (answers.weaknesses.length > 0) {
-    sentences.push(...answers.weaknesses.slice(0, 2).map(weaknessDetail));
-  } else {
-    sentences.push(opportunityDetail(primary));
-  }
-  const style = answers.playerTypes[0];
-  if (style) sentences.push(styleClause(style));
-  if (answers.successMetric) sentences.push(successClause(answers.successMetric));
-  return sentences.join(" ");
-}
-
 export function generateGamePlan(answers: OnboardingAnswers): GamePlan {
-  const areas = focusAreas(answers);
+  const range = answers.duprRange ?? DEFAULT_RANGE;
+  const areas = curriculumFor(range);
   const primary = areas[0];
-  const secondary = areas.length > 1 ? areas[1] : null;
-
-  // The named weaknesses headline the opportunity when the player gave them;
-  // a single weakness is paired with the next focus area.
-  let names: string[] = [];
-  const firstWeakness = answers.weaknesses[0];
-  if (firstWeakness) {
-    names.push(weaknessFocusName[firstWeakness]);
-    const secondWeakness = answers.weaknesses[1];
-    if (secondWeakness) {
-      names.push(weaknessFocusName[secondWeakness].toLowerCase());
-    } else if (secondary) {
-      names.push(trainingGoalName[secondary].toLowerCase());
-    }
-  }
-  if (names.length === 0) names = [trainingGoalName[primary]];
-  const opportunity = names.join(" + ");
-
-  const scale =
-    trainingTimeRepScale[answers.trainingTime] *
-    (answers.level === "justStarting" ? 0.7 : 1.0) *
-    (answers.competitiveness
-      ? competitivenessRepScale[answers.competitiveness]
-      : 1.0);
+  const opportunity = `${trainingGoalName[primary]} + ${trainingGoalName[areas[1]].toLowerCase()}`;
+  const scale = trainingTimeRepScale[answers.trainingTime] * volumeScaleFor(range);
 
   const items: GamePlanItem[] = [];
-  const hasTitle = (title: string) =>
-    items.some((item) => item.title === title);
+  const add = (item: GamePlanItem) => {
+    if (!items.some((existing) => existing.title === item.title)) items.push(item);
+  };
 
-  // Weaknesses with no shot mapping still lead the plan with their own line.
-  for (const weakness of answers.weaknesses) {
-    if (weaknessGoal(weakness) !== null) continue;
-    const item = weaknessItem(weakness, scale);
-    if (!hasTitle(item.title)) items.push(item);
-  }
-  for (const goal of areas.slice(0, 3)) {
-    if (hasTitle(prescriptionTitle(goal))) continue;
-    items.push(prescriptionItem(goal, scale));
-  }
+  // Core: the curriculum for the player's range.
+  for (const goal of areas) add(prescriptionItem(goal, scale));
 
-  // Playing style acts as a counterweight so the plan rounds out the game.
-  for (const style of answers.playerTypes.slice(0, 2)) {
-    const item = styleItem(style, scale);
-    if (!hasTitle(item.title)) items.push(item);
-  }
-
-  // Extra lines driven by the unmappable struggles.
-  if (answers.struggles.includes("whatToPractice")) {
-    items.push(
-      makeItem("Guided sessions with your AI coach", 3, "sessions", "AudioWaveform"),
-    );
-  }
-  if (
-    answers.struggles.includes("fitness") ||
-    answers.goals.includes("speedReaction")
-  ) {
-    if (!items.some((item) => item.unit === "min")) {
-      items.push(
-        makeItem("Footwork & conditioning", scaled(10, scale), "min", "Footprints"),
-      );
-    }
-  }
-  if (
-    answers.goals.includes("strategyIQ") ||
-    answers.struggles.includes("betterPlayers")
-  ) {
-    if (!items.some((item) => item.title.includes("strategy"))) {
-      items.push(makeItem("Strategy sessions", 2, "sessions", "Brain"));
-    }
-  }
-  // Competitive players rehearse pressure, not just technique.
-  if (
-    answers.competitiveness &&
-    wantsPressureWork(answers.competitiveness) &&
-    !hasTitle("Scored, game-like reps")
-  ) {
-    items.push(
+  // Fine-tuning: personal answers add lines but never replace the core.
+  if (wantsPressureWork(range)) {
+    add(
       makeItem(
         "Scored, game-like reps",
-        answers.competitiveness === "tournament" ? 3 : 2,
+        duprOrder(range) >= duprOrder("advancedPlus") ? 3 : 2,
         "sessions",
         "Trophy",
       ),
     );
   }
-  if (
-    (answers.motivation === "tournaments" ||
-      answers.motivation === "competitivePlayer") &&
-    !hasTitle("Reaction drills")
-  ) {
-    items.push(makeItem("Reaction drills", 3, "drills", "Zap"));
+  const extraGoals = [
+    ...answers.struggles
+      .map(struggleGoal)
+      .filter((goal): goal is TrainingGoal => goal !== null),
+    ...answers.goals,
+  ];
+  for (const goal of extraGoals) {
+    if (!areas.includes(goal)) add(prescriptionItem(goal, scale));
   }
+  for (const style of answers.playerTypes.slice(0, 2)) add(styleItem(style, scale));
+  if (answers.struggles.includes("whatToPractice")) {
+    add(makeItem("Guided sessions with your AI coach", 3, "sessions", "AudioWaveform"));
+  }
+  if (
+    answers.struggles.includes("fitness") &&
+    !items.some((item) => item.unit === "min")
+  ) {
+    add(makeItem("Footwork & conditioning", scaled(10, scale), "min", "Footprints"));
+  }
+
+  const sentences = [levelNarrative(range)];
+  const style = answers.playerTypes[0];
+  if (style) sentences.push(styleClause(style));
+  if (answers.successMetric) sentences.push(successClause(answers.successMetric));
 
   return {
     opportunity,
-    opportunityDetail: detailNarrative(answers, primary),
+    opportunityDetail: sentences.join(" "),
     // Keep the reveal glanceable — the plan adapts weekly anyway.
     items: items.slice(0, 5),
     focusCue: focusCueFor(answers, primary),
@@ -526,12 +424,6 @@ export function focusCueFor(
     (primary === "drives" || primary === "volleys")
   ) {
     return "Step in early, finish through the ball";
-  }
-  if (answers.weaknesses.includes("lob")) {
-    return "Turn and track — get behind the ball";
-  }
-  if (answers.weaknesses.includes("mentalGame")) {
-    return "One point at a time, reset between reps";
   }
   return goalFocusCue(primary);
 }
@@ -566,21 +458,19 @@ export function shotForGoal(goal: TrainingGoal): ShotType {
     case "consistency":
     case "dinking":
     case "speedReaction":
+    case "competitive":
       return "forehandDink";
     case "serve":
       return "serve";
     case "returnOfServe":
       return "returnOfServe";
     case "thirdShotDrops":
+    case "strategyIQ":
       return "thirdShotDrop";
     case "drives":
       return "forehandDrive";
     case "volleys":
       return "forehandVolley";
-    case "strategyIQ":
-      return "thirdShotDrop";
-    case "competitive":
-      return "forehandDink";
   }
 }
 
@@ -589,6 +479,8 @@ export function mechanicForGoal(goal: TrainingGoal): MechanicID {
     case "consistency":
     case "dinking":
     case "returnOfServe":
+    case "strategyIQ":
+    case "competitive":
       return "contactPosition";
     case "serve":
       return "stanceWidth";
@@ -600,123 +492,109 @@ export function mechanicForGoal(goal: TrainingGoal): MechanicID {
       return "armStructure";
     case "speedReaction":
       return "kneeBend";
-    case "strategyIQ":
-    case "competitive":
-      return "contactPosition";
   }
 }
 
-/**
- * Rebuilds the onboarding answers from a saved profile, so every feature
- * personalises from the same inputs the plan was generated with.
- */
+/** Rebuilds the onboarding answers from a saved profile. */
 export function answersFromProfile(profile: PlayerProfile): OnboardingAnswers {
   return {
     name: profile.displayName,
-    level: profile.skillLevel,
+    duprRange: profile.duprRange,
     playerTypes: profile.playerTypes,
     frequency: profile.frequency,
     goals: profile.goals,
     struggles: profile.struggles,
-    weaknesses: profile.weaknesses,
     trainingTime: profile.trainingTime,
-    motivation: profile.motivation,
-    competitiveness: profile.competitiveness,
     successMetric: profile.successMetric,
   };
 }
 
-/** The shot the player should practise first, from a saved profile. */
+/** The shot a player should practise first when they have no sessions yet. */
 export function focusShotFor(profile: PlayerProfile): ShotType {
-  return shotForGoal(focusAreas(answersFromProfile(profile))[0]);
+  return shotForGoal(curriculumFor(profile.duprRange ?? DEFAULT_RANGE)[0]);
+}
+
+/** A drill for the mechanic that suits the player's range. */
+export function drillIDFor(
+  mechanic: MechanicID,
+  shot: ShotType,
+  range: DuprRange,
+): string {
+  const suitable = allDrills.filter(
+    (drill) => duprOrder(drill.minimumLevel) <= duprOrder(range),
+  );
+  const pick =
+    suitable.find((drill) => drill.targetMechanic === mechanic && drill.shot === shot) ??
+    drillForMechanic(mechanic, shot);
+  return pick?.id ?? allDrills[0].id;
+}
+
+/** Practice weekdays (1 = Sunday) for the player's weekly time budget. */
+export function practiceWeekdays(time: WeeklyTrainingTime): number[] {
+  const days = practiceDaysPerWeek[time];
+  if (days <= 2) return [2, 5];
+  if (days === 3) return [2, 4, 6];
+  if (days === 4) return [2, 3, 5, 6];
+  return [2, 3, 4, 5, 6];
 }
 
 /**
- * The active weekly plan, built from onboarding answers, ending in a baseline
- * assessment so improvement can be measured.
+ * The weekly plan. Measured weak spots (from real reps) lead; remaining slots
+ * come from the range curriculum. With no measured data the whole week is the
+ * curriculum — the default for a brand-new player. Every week ends with a
+ * Sunday assessment so change is measured.
  */
-export function weeklyPlanFromAnswers(answers: OnboardingAnswers): WeeklyPlan {
-  const areas = focusAreas(answers).slice(0, 3);
-  const days = practiceDaysPerWeek[answers.trainingTime];
+export function buildWeeklyPlan(
+  profile: PlayerProfile,
+  measured: MeasuredFocus[],
+  leadInsight: string | null = null,
+  now: number = Date.now(),
+): WeeklyPlan {
+  const range = profile.duprRange ?? DEFAULT_RANGE;
+  const curriculumFocus: MeasuredFocus[] = curriculumFor(range).map((goal) => ({
+    shot: shotForGoal(goal),
+    mechanic: mechanicForGoal(goal),
+  }));
 
-  let daySlots: number[];
-  if (days <= 2) daySlots = [2, 5];
-  else if (days === 3) daySlots = [2, 4, 6];
-  else if (days === 4) daySlots = [2, 3, 5, 6];
-  else daySlots = [2, 3, 4, 5, 6];
+  const focus: MeasuredFocus[] = [];
+  for (const item of [...measured.slice(0, 3), ...curriculumFocus]) {
+    if (!focus.some((f) => f.shot === item.shot && f.mechanic === item.mechanic)) {
+      focus.push(item);
+    }
+  }
 
-  const entries: WeeklyPlanEntry[] = daySlots.map((weekday, index) => {
-    const goal = areas[index % areas.length];
-    const shot = shotForGoal(goal);
-    const mechanic = mechanicForGoal(goal);
-    return {
-      id: crypto.randomUUID(),
-      weekday,
-      shot,
-      mechanic,
-      drillID: drillForMechanic(mechanic, shot)?.id ?? allDrills[0].id,
-      isAssessment: false,
-    };
-  });
+  const entries: WeeklyPlanEntry[] = practiceWeekdays(profile.trainingTime).map(
+    (weekday, index) => {
+      const item = focus[index % focus.length];
+      return {
+        id: crypto.randomUUID(),
+        weekday,
+        shot: item.shot,
+        mechanic: item.mechanic,
+        drillID: drillIDFor(item.mechanic, item.shot, range),
+        isAssessment: false,
+      };
+    },
+  );
 
-  const assessmentGoal = areas[0];
-  const assessmentShot = shotForGoal(assessmentGoal);
+  const lead = focus[0];
   entries.push({
     id: crypto.randomUUID(),
     weekday: 1,
-    shot: assessmentShot,
-    mechanic: mechanicForGoal(assessmentGoal),
-    drillID: drillsForShot(assessmentShot)[0]?.id ?? allDrills[0].id,
+    shot: lead.shot,
+    mechanic: lead.mechanic,
+    drillID: drillsForShot(lead.shot)[0]?.id ?? allDrills[0].id,
     isAssessment: true,
   });
 
-  const plan = generateGamePlan(answers);
-  let rationale = `Built from your onboarding: ${plan.opportunity} is your biggest opportunity, with a baseline assessment so Paddle Up can measure whether it moves.`;
-  if (answers.playerTypes.length > 0) {
-    const styles = answers.playerTypes
-      .slice(0, 2)
-      .map((style) => styleDisplayName(style).toLowerCase())
-      .join(" + ");
-    rationale += ` Balanced for a ${styles} player`;
-    if (answers.competitiveness) {
-      rationale += ` training as a ${competitivenessDisplayName(
-        answers.competitiveness,
-      ).toLowerCase()}`;
-    }
-    rationale += ".";
+  const rangeLabel = duprRangeOption(range).rangeLabel;
+  let rationale: string;
+  if (leadInsight) {
+    rationale = `Built around your recurring ${leadInsight} issue, measured from your reps, with the rest of the week from the ${rangeLabel} curriculum and a Sunday assessment to measure whether it moved.`;
+  } else if (measured.length > 0) {
+    rationale = `Built from the weakest mechanics in your recent sessions, rounded out with the ${rangeLabel} curriculum and a Sunday assessment to measure progress.`;
+  } else {
+    rationale = `A starter week for a ${duprFullLabel(range)} player, ending with an assessment so Paddle Up can measure your baseline. Once you log sessions, your measured weak spots take over the plan.`;
   }
-
-  return { generatedAt: Date.now(), entries, rationale };
-}
-
-function styleDisplayName(style: PlayerStyle): string {
-  switch (style) {
-    case "aggressive":
-      return "Aggressive";
-    case "defensive":
-      return "Defensive";
-    case "consistent":
-      return "Consistent";
-    case "athletic":
-      return "Fast / Athletic";
-    case "strategic":
-      return "Strategic";
-    case "figuringOut":
-      return "Still figuring out my style";
-  }
-}
-
-function competitivenessDisplayName(value: Competitiveness): string {
-  switch (value) {
-    case "fun":
-      return "Just here for fun";
-    case "recreational":
-      return "Recreational";
-    case "veryCompetitive":
-      return "Very competitive";
-    case "league":
-      return "League player";
-    case "tournament":
-      return "Tournament player";
-  }
+  return { generatedAt: now, entries, rationale };
 }

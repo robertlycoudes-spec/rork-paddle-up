@@ -3,18 +3,24 @@
 //  PaddleUp
 //
 
+import StoreKit
 import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(StoreService.self) private var store
+    @Environment(CloudAuthService.self) private var cloudAuth
+    @Environment(CloudSyncService.self) private var sync
     @Environment(\.dismiss) private var dismiss
 
     @State private var showingDeveloperTuning = false
+    @State private var showingManageSubscriptions = false
+    @State private var restoreMessage: String?
 
     var body: some View {
         List {
             subscriptionSection
+            cloudSection
             coachingSection
             practiceSection
             playerSection
@@ -32,6 +38,10 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showingDeveloperTuning) { RubricTuningView() }
+        .manageSubscriptionsSheet(isPresented: $showingManageSubscriptions)
+        .onChange(of: showingManageSubscriptions) { _, isShowing in
+            if !isShowing { Task { await store.refreshEntitlements() } }
+        }
     }
 
     // MARK: - Sections
@@ -46,26 +56,69 @@ struct SettingsView: View {
                     Text(store.activeProduct?.title ?? "Active")
                         .foregroundStyle(PUColor.textSecondary)
                 }
-                Button("Manage subscription") {
-                    if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
-                        UIApplication.shared.open(url)
+                if let expiry = store.expirationDate {
+                    HStack {
+                        Text(store.willAutoRenew == false ? "Ends" : "Renews")
+                        Spacer()
+                        Text(expiry.formatted(date: .abbreviated, time: .omitted))
+                            .foregroundStyle(PUColor.textSecondary)
                     }
                 }
-                .foregroundStyle(PUColor.textPrimary)
+                Button("Manage subscription") { showingManageSubscriptions = true }
+                    .foregroundStyle(PUColor.textPrimary)
             } else {
                 NavigationLink { PaywallView() } label: {
                     Label("Upgrade to Paddle Up Pro", systemImage: "sparkles")
                         .foregroundStyle(PUColor.lime)
                 }
             }
-            Button("Restore purchases") {
-                Task { _ = await store.restore() }
+            Button {
+                Task {
+                    let restored = await store.restore()
+                    restoreMessage = restored ? "Paddle Up Pro restored." : store.lastError
+                }
+            } label: {
+                HStack {
+                    Text("Restore purchases")
+                    Spacer()
+                    if store.isPurchasing { ProgressView() }
+                }
             }
             .foregroundStyle(PUColor.textPrimary)
+            .disabled(store.isPurchasing)
         } header: {
             Text("Subscription")
+        } footer: {
+            if let restoreMessage { Text(restoreMessage) }
         }
         .listRowBackground(PUColor.surface)
+    }
+
+    private var cloudSection: some View {
+        Section {
+            NavigationLink { CloudAccountView() } label: {
+                HStack {
+                    Label("Cloud backup & sync", systemImage: "icloud")
+                    Spacer()
+                    Text(cloudStatusLabel)
+                        .font(PUFont.caption)
+                        .foregroundStyle(PUColor.textSecondary)
+                }
+            }
+        } header: {
+            Text("Cloud")
+        }
+        .listRowBackground(PUColor.surface)
+    }
+
+    private var cloudStatusLabel: String {
+        guard cloudAuth.isSignedIn else { return "Off" }
+        switch sync.status {
+        case .syncing: return "Syncing…"
+        case .offline: return "Offline"
+        case .failed: return "Retrying"
+        case .idle, .signedOut: return "On"
+        }
     }
 
     private var coachingSection: some View {
@@ -117,12 +170,12 @@ struct SettingsView: View {
                     Text(hand.displayName).tag(hand)
                 }
             }
-            Picker("Skill level", selection: Binding(
-                get: { appState.profile.skillLevel },
-                set: { value in appState.updateProfile { $0.skillLevel = value } }
+            Picker("Level (DUPR)", selection: Binding(
+                get: { appState.profile.duprRange ?? GamePlanEngine.defaultRange },
+                set: { value in appState.updateProfile { $0.duprRange = value } }
             )) {
-                ForEach(SkillLevel.allCases) { level in
-                    Text(level.displayName).tag(level)
+                ForEach(DuprRange.allCases) { range in
+                    Text(range.fullLabel).tag(range)
                 }
             }
             Picker("Primary focus", selection: Binding(
@@ -174,11 +227,13 @@ struct SettingsView: View {
                     Label("Analytics", systemImage: "chart.xyaxis.line")
                         .foregroundStyle(PUColor.amber)
                 }
-                Toggle("Pro entitlement (debug)", isOn: Binding(
-                    get: { store.isPro },
+                #if DEBUG
+                Toggle("Pro override (debug builds only)", isOn: Binding(
+                    get: { store.debugOverride },
                     set: { store.setPro($0) }
                 ))
                 .tint(PUColor.amber)
+                #endif
             }
 
             HStack {

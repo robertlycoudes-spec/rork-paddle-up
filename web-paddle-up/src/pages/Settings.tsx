@@ -21,9 +21,19 @@ import {
   type SessionLength,
   type VoiceCoachingLevel,
 } from "@/lib/pu/persistence";
+import { duprRanges } from "@/lib/pu/profile";
 import { cn } from "@/lib/utils";
 import { useAppState } from "@/state/AppStateProvider";
+import { useCloud, type SyncStatus } from "@/state/CloudProvider";
 import { useStore } from "@/state/StoreProvider";
+
+const statusText: Record<SyncStatus, string> = {
+  signedOut: "Off",
+  idle: "Up to date",
+  syncing: "Syncing…",
+  offline: "Offline — will sync on reconnect",
+  failed: "Couldn't reach the cloud — retrying",
+};
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -37,7 +47,9 @@ export default function Settings() {
     resetOnboarding,
   } = useAppState();
   const store = useStore();
+  const cloud = useCloud();
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [cloudMessage, setCloudMessage] = useState<string | null>(null);
 
   return (
     <Screen className="flex flex-col gap-4">
@@ -78,6 +90,92 @@ export default function Settings() {
             )}
           </div>
         </Card>
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        <SectionHeader title="Cloud backup" />
+        {cloud.user ? (
+          <Card>
+            <div className="flex flex-col gap-1">
+              <span className="text-[17px] font-semibold text-pu-primary">
+                {cloud.user.email || cloud.user.name || "Your account"}
+              </span>
+              <span className="text-[13px] font-medium text-pu-secondary">
+                {statusText[cloud.status]}
+                {cloud.lastSyncedAt && cloud.status === "idle"
+                  ? ` · ${new Date(cloud.lastSyncedAt).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}`
+                  : ""}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void cloud.syncNow()}
+                disabled={cloud.status === "syncing"}
+                className="h-9 rounded-full bg-pu-lime px-4 text-[13px] font-bold text-pu-lime-ink disabled:opacity-60"
+              >
+                SYNC NOW
+              </button>
+              <button
+                type="button"
+                onClick={cloud.signOut}
+                className="h-9 rounded-full border border-pu-hairline bg-pu-surface px-4 text-[13px] font-semibold text-pu-primary"
+              >
+                Sign out
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const deleted = await cloud.deleteCloudData();
+                  setCloudMessage(
+                    deleted
+                      ? "Cloud copy deleted. Data in this browser is untouched."
+                      : "Couldn't delete right now. Try again.",
+                  );
+                }}
+                className="h-9 px-2 text-[13px] font-semibold text-pu-alert"
+              >
+                Delete cloud data
+              </button>
+            </div>
+            <p className="mt-2.5 text-[11px] leading-relaxed text-pu-tertiary">
+              Changes sync automatically. If this browser and the cloud both
+              changed while offline, the most recent change wins.
+            </p>
+          </Card>
+        ) : (
+          <Card>
+            <span className="text-[17px] font-semibold text-pu-primary">
+              Keep your progress safe
+            </span>
+            <p className="mt-1 text-[13px] font-medium leading-relaxed text-pu-secondary">
+              Sign in to back up your profile, sessions, reps, mechanic history,
+              plans and settings. Optional — Paddle Up works fully without it.
+            </p>
+            <div className="mt-3 flex flex-col gap-2">
+              <PrimaryButton
+                onClick={() => void cloud.signIn("apple")}
+                disabled={cloud.isSigningIn}
+              >
+                Continue with Apple
+              </PrimaryButton>
+              <SecondaryButton
+                onClick={() => void cloud.signIn("google")}
+                disabled={cloud.isSigningIn}
+              >
+                Continue with Google
+              </SecondaryButton>
+            </div>
+          </Card>
+        )}
+        {(cloud.error || cloudMessage) && (
+          <p className="text-[13px] font-medium text-pu-amber">
+            {cloud.error ?? cloudMessage}
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-2.5">
@@ -156,6 +254,21 @@ export default function Settings() {
             actually play.
           </p>
         </Card>
+        <Card padding="p-3.5">
+          <MicroLabel>Level (DUPR)</MicroLabel>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {duprRanges.map((range) => (
+              <OptionRow
+                key={range.id}
+                label={`${range.rangeLabel} · ${range.displayName}`}
+                isSelected={profile.duprRange === range.id}
+                onSelect={() =>
+                  updateProfile((current) => ({ ...current, duprRange: range.id }))
+                }
+              />
+            ))}
+          </div>
+        </Card>
       </div>
 
       <div className="flex flex-col gap-2.5">
@@ -179,6 +292,17 @@ export default function Settings() {
             updateSettings((current) => ({
               ...current,
               analyticsEnabled: !current.analyticsEnabled,
+            }))
+          }
+        />
+        <ToggleRow
+          label="Help improve scoring"
+          detail="Off by default. Marks new sessions and reps as OK to include, anonymized, in future scoring work. Nothing is sent today and video is never included."
+          isOn={settings.shareAnonymizedData}
+          onToggle={() =>
+            updateSettings((current) => ({
+              ...current,
+              shareAnonymizedData: !current.shareAnonymizedData,
             }))
           }
         />
@@ -244,7 +368,9 @@ export default function Settings() {
             <div className="mt-3 flex gap-2.5">
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
+                  // Delete the cloud copy first, or the next sync would restore it.
+                  if (cloud.user) await cloud.deleteCloudData();
                   deleteEverything();
                   setConfirming(null);
                   navigate("/");

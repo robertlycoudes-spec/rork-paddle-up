@@ -17,7 +17,10 @@ import { AppShell } from "@/components/pu/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppStateProvider, useAppState } from "@/state/AppStateProvider";
+import { CloudProvider } from "@/state/CloudProvider";
 import { StoreProvider } from "@/state/StoreProvider";
+
+import AuthCallback from "./pages/AuthCallback";
 
 import DrillDetail from "./pages/DrillDetail";
 import Home from "./pages/Home";
@@ -57,6 +60,15 @@ function Routed() {
   }, []);
 
   if (showSplash || !isLoaded) return <Splash />;
+
+  // OAuth return works whether or not onboarding is finished.
+  if (window.location.pathname === "/auth/callback") {
+    return (
+      <Routes>
+        <Route path="/auth/callback" element={<AuthCallback />} />
+      </Routes>
+    );
+  }
 
   // The whole app lives behind onboarding until the plan is built.
   if (!profile.hasCompletedOnboarding) {
@@ -106,17 +118,19 @@ function Routed() {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AppStateProvider>
-      <StoreProvider>
-        <TooltipProvider>
-          <Toaster />
-          <BrowserRouter
-            future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-          >
-            <ScrollToTop />
-            <Routed />
-          </BrowserRouter>
-        </TooltipProvider>
-      </StoreProvider>
+      <CloudProvider>
+        <StoreProvider>
+          <TooltipProvider>
+            <Toaster />
+            <BrowserRouter
+              future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+            >
+              <ScrollToTop />
+              <Routed />
+            </BrowserRouter>
+          </TooltipProvider>
+        </StoreProvider>
+      </CloudProvider>
     </AppStateProvider>
   </QueryClientProvider>
 );

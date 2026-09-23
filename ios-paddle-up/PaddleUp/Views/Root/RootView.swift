@@ -36,6 +36,9 @@ nonisolated struct PracticeConfiguration: Identifiable, Sendable, Equatable {
 struct RootView: View {
     @Environment(AuthService.self) private var auth
     @Environment(AppState.self) private var appState
+    @Environment(StoreService.self) private var store
+    @Environment(CloudAuthService.self) private var cloudAuth
+    @Environment(CloudSyncService.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showingSplash = true
@@ -62,11 +65,29 @@ struct RootView: View {
             let account = auth.ensureLocalAccount()
             appState.load(accountID: account.id, email: account.email,
                           displayName: account.displayName)
-            try? await Task.sleep(for: .milliseconds(1100))
+            sync.attach(appState)
+            async let splash: Void = { try? await Task.sleep(for: .milliseconds(1100)) }()
+            await cloudAuth.checkAuth()
+            await sync.syncNow()
+            await splash
             withAnimation(.easeInOut(duration: 0.45)) { showingSplash = false }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { appState.flush() }
+            if phase != .active {
+                appState.flush()
+            } else if !showingSplash {
+                Task {
+                    await store.refreshEntitlements()
+                    await sync.syncNow()
+                }
+            }
+        }
+        .onChange(of: cloudAuth.isSignedIn) { _, signedIn in
+            if signedIn {
+                Task { await sync.syncNow() }
+            } else {
+                sync.signedOut()
+            }
         }
     }
 }

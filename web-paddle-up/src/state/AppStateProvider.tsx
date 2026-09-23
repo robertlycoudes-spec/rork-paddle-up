@@ -20,14 +20,16 @@ import {
   sessionFocus,
   type WeaknessInsight,
 } from "@/lib/pu/coaching";
-import { allDrills, drillById, drillForMechanic, drillsForShot, type Drill } from "@/lib/pu/drills";
+import { drillById, drillsForShot, type Drill } from "@/lib/pu/drills";
 import {
   answersFromProfile,
+  buildWeeklyPlan,
   focusShotFor,
-  weeklyPlanFromAnswers,
+  type MeasuredFocus,
   type OnboardingAnswers,
   type WeeklyPlan,
 } from "@/lib/pu/game-plan";
+import { mechanicName } from "@/lib/pu/mechanics";
 import { allMechanics, type MechanicID } from "@/lib/pu/mechanics";
 import {
   deleteAccountData,
@@ -109,6 +111,8 @@ interface AppStateValue {
 
   deleteAllPracticeData: () => void;
   deleteEverything: () => void;
+  /** Replaces local data with a newer cloud snapshot (last write wins). */
+  applyRemote: (remote: AccountData) => void;
 }
 
 const AppStateContext = createContext<AppStateValue | null>(null);
@@ -133,15 +137,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setAccountID(account.id);
     const loaded = loadAccountData(account.id);
     if (loaded) {
-      // Profiles saved before the new onboarding ran have no goal data; send
-      // them through onboarding again rather than personalising on nothing.
-      if (loaded.profile.hasCompletedOnboarding && loaded.profile.goals.length === 0) {
+      // Profiles saved before the new onboarding ran have no level; send them
+      // through onboarding again rather than personalising on nothing.
+      if (loaded.profile.hasCompletedOnboarding && !loaded.profile.duprRange) {
         loaded.profile = { ...loaded.profile, hasCompletedOnboarding: false };
       }
       setData(loaded);
     }
     setIsLoaded(true);
   }, []);
+
+  // Every local change stamps modifiedAt, which cloud sync uses for
+  // last-write-wins. Remote snapshots (applyRemote) keep their own stamp.
+  const setLocalData = useCallback(
+    (transform: (current: AccountData) => AccountData) => {
+      setData((current) => {
+        const next = transform(current);
+        return next === current ? current : { ...next, modifiedAt: Date.now() };
+      });
+    },
+    [],
+  );
 
   // Debounced write so rapid rep updates don't thrash storage.
   useEffect(() => {
@@ -343,31 +359,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const updateProfile = useCallback(
     (transform: (profile: PlayerProfile) => PlayerProfile) => {
-      setData((current) => ({ ...current, profile: transform(current.profile) }));
+      setLocalData((current) => ({ ...current, profile: transform(current.profile) }));
     },
-    [],
+    [setLocalData],
   );
 
   const updateSettings = useCallback(
     (transform: (settings: AppSettings) => AppSettings) => {
-      setData((current) => ({ ...current, settings: transform(current.settings) }));
+      setLocalData((current) => ({ ...current, settings: transform(current.settings) }));
     },
-    [],
+    [setLocalData],
   );
 
   const applyAnswers = useCallback(
     (profile: PlayerProfile, answers: OnboardingAnswers): PlayerProfile => ({
       ...profile,
       displayName: answers.name.trim() ? answers.name : profile.displayName,
-      skillLevel: answers.level,
+      duprRange: answers.duprRange ?? profile.duprRange,
       playerTypes: answers.playerTypes,
       frequency: answers.frequency,
       goals: answers.goals,
       struggles: answers.struggles,
-      weaknesses: answers.weaknesses,
       trainingTime: answers.trainingTime,
-      motivation: answers.motivation,
-      competitiveness: answers.competitiveness,
       successMetric: answers.successMetric,
     }),
     [],
@@ -376,110 +389,68 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   /** Saves a draft as answers are collected, so nothing is lost on reload. */
   const saveOnboardingDraft = useCallback(
     (answers: OnboardingAnswers) => {
-      setData((current) => ({
+      setLocalData((current) => ({
         ...current,
         profile: applyAnswers(current.profile, answers),
       }));
     },
-    [applyAnswers],
+    [applyAnswers, setLocalData],
   );
 
-  /** Completes onboarding and installs the personalised weekly plan. */
+  /**
+   * Builds the week from the DUPR range plus measured practice data:
+   * recurring issues first, then each recent session's weakest mechanic.
+   */
+  const buildPlan = useCallback((source: AccountData): WeeklyPlan => {
+    const completed = source.sessions
+      .filter((session) => session.endedAt && activeReps(session).length > 0)
+      .sort((a, b) => b.startedAt - a.startedAt);
+    const insights = computeRecurringWeaknesses(completed);
+
+    const measured: MeasuredFocus[] = insights
+      .slice(0, 3)
+      .map((insight) => ({ shot: insight.shot, mechanic: insight.mechanic }));
+    for (const session of completed.slice(0, 4)) {
+      const weakest = weakestMechanic(session);
+      if (!weakest) continue;
+      const exists = measured.some(
+        (item) => item.shot === session.shot && item.mechanic === weakest.mechanic,
+      );
+      if (!exists) measured.push({ shot: session.shot, mechanic: weakest.mechanic });
+    }
+
+    const first = insights[0];
+    const lead = first
+      ? `${mechanicName[first.mechanic].toLowerCase()} on the ${shotGroupName[
+          groupOf(first.shot)
+        ].toLowerCase()}`
+      : null;
+    return buildWeeklyPlan(source.profile, measured, lead);
+  }, []);
+
+  /** Completes onboarding and installs the level-based starter plan. */
   const completeOnboarding = useCallback(
     (answers: OnboardingAnswers) => {
-      setData((current) => ({
-        ...current,
-        profile: {
-          ...applyAnswers(current.profile, answers),
-          hasCompletedOnboarding: true,
-        },
-        plan: weeklyPlanFromAnswers(answers),
-      }));
+      setLocalData((current) => {
+        const next: AccountData = {
+          ...current,
+          profile: {
+            ...applyAnswers(current.profile, answers),
+            hasCompletedOnboarding: true,
+          },
+        };
+        return { ...next, plan: buildPlan(next) };
+      });
     },
-    [applyAnswers],
+    [applyAnswers, buildPlan, setLocalData],
   );
 
   const resetOnboarding = useCallback(() => {
-    setData((current) => ({
+    setLocalData((current) => ({
       ...current,
       profile: { ...current.profile, hasCompletedOnboarding: false },
     }));
-  }, []);
-
-  const buildPlan = useCallback(
-    (source: AccountData): WeeklyPlan => {
-      const completed = source.sessions
-        .filter((session) => session.endedAt && activeReps(session).length > 0)
-        .sort((a, b) => b.startedAt - a.startedAt);
-      const insights = computeRecurringWeaknesses(completed);
-
-      const weaknesses: { shot: ShotType; mechanic: MechanicID }[] = insights
-        .slice(0, 3)
-        .map((insight) => ({ shot: insight.shot, mechanic: insight.mechanic }));
-
-      if (weaknesses.length < 3) {
-        for (const session of completed.slice(0, 4)) {
-          const weakest = weakestMechanic(session);
-          if (!weakest) continue;
-          const exists = weaknesses.some(
-            (item) =>
-              item.shot === session.shot && item.mechanic === weakest.mechanic,
-          );
-          if (!exists) {
-            weaknesses.push({ shot: session.shot, mechanic: weakest.mechanic });
-          }
-          if (weaknesses.length === 3) break;
-        }
-      }
-
-      if (weaknesses.length === 0) {
-        weaknesses.push(
-          { shot: "forehandDink", mechanic: "contactPosition" },
-          { shot: "forehandDink", mechanic: "kneeBend" },
-          { shot: "backhandDink", mechanic: "contactPosition" },
-        );
-      }
-      while (weaknesses.length < 3) {
-        weaknesses.push(weaknesses[weaknesses.length % weaknesses.length]);
-      }
-
-      // Monday / Wednesday / Friday work, Sunday assessment.
-      const weekdays = [2, 4, 6];
-      const entries = weekdays.map((weekday, index) => {
-        const weakness = weaknesses[index];
-        return {
-          id: crypto.randomUUID(),
-          weekday,
-          shot: weakness.shot,
-          mechanic: weakness.mechanic,
-          drillID:
-            drillForMechanic(weakness.mechanic, weakness.shot)?.id ??
-            allDrills[0].id,
-          isAssessment: false,
-        };
-      });
-
-      const assessmentShot = weaknesses[0]?.shot ?? "forehandDink";
-      entries.push({
-        id: crypto.randomUUID(),
-        weekday: 1,
-        shot: assessmentShot,
-        mechanic: weaknesses[0]?.mechanic ?? "contactPosition",
-        drillID: drillsForShot(assessmentShot)[0]?.id ?? allDrills[0].id,
-        isAssessment: true,
-      });
-
-      const first = insights[0];
-      const rationale = first
-        ? `Built around your recurring ${first.mechanic.toLowerCase()} issue on the ${shotGroupName[
-            groupOf(first.shot)
-          ].toLowerCase()}, with a Sunday assessment to measure whether it moved.`
-        : "A starter week focused on dink fundamentals, ending with an assessment so Paddle Up can measure your baseline.";
-
-      return { generatedAt: Date.now(), entries, rationale };
-    },
-    [],
-  );
+  }, [setLocalData]);
 
   const awardAchievements = useCallback(
     (source: AccountData, session: SessionRecord): Achievement[] => {
@@ -539,8 +510,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const saveSession = useCallback(
-    (session: SessionRecord) => {
-      setData((current) => {
+    (incoming: SessionRecord) => {
+      setLocalData((current) => {
+        // Consent flags are stamped from the current setting; only flags the
+        // record — nothing is sent anywhere.
+        const session: SessionRecord = current.settings.shareAnonymizedData
+          ? {
+              ...incoming,
+              sharedForResearch: true,
+              reps: incoming.reps.map((rep) => ({ ...rep, sharedForResearch: true })),
+            }
+          : incoming;
         const sessions = current.sessions.some((item) => item.id === session.id)
           ? current.sessions.map((item) =>
               item.id === session.id ? session : item,
@@ -577,14 +557,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         };
         next.achievements = awardAchievements(next, session);
 
-        // Refresh weekly, or whenever the plan's assumptions go stale.
-        if (!next.plan || Date.now() - next.plan.generatedAt > 7 * DAY_MS) {
+        // Refresh weekly, or as soon as the first completed session gives the
+        // plan measured data to replace the level-only starter week.
+        const completedCount = sessions.filter(
+          (item) => item.endedAt && activeReps(item).length > 0,
+        ).length;
+        const isFirstMeasured =
+          session.endedAt !== undefined &&
+          activeReps(session).length > 0 &&
+          completedCount === 1;
+        if (
+          !next.plan ||
+          isFirstMeasured ||
+          Date.now() - next.plan.generatedAt > 7 * DAY_MS
+        ) {
           next.plan = buildPlan(next);
         }
         return next;
       });
     },
-    [awardAchievements, buildPlan],
+    [awardAchievements, buildPlan, setLocalData],
   );
 
   const sessionById = useCallback(
@@ -593,7 +585,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteSession = useCallback((id: string) => {
-    setData((current) => {
+    setLocalData((current) => {
       const sessions = current.sessions.filter((session) => session.id !== id);
       return {
         ...current,
@@ -606,10 +598,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         ),
       };
     });
-  }, []);
+  }, [setLocalData]);
 
   const deleteRep = useCallback((rep: RepRecord) => {
-    setData((current) => ({
+    setLocalData((current) => ({
       ...current,
       sessions: current.sessions.map((session) =>
         session.id !== rep.sessionID
@@ -633,10 +625,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         },
       ],
     }));
-  }, []);
+  }, [setLocalData]);
 
   const reclassifyRep = useCallback((rep: RepRecord, shot: ShotType) => {
-    setData((current) => ({
+    setLocalData((current) => ({
       ...current,
       sessions: current.sessions.map((session) =>
         session.id !== rep.sessionID
@@ -663,14 +655,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         },
       ],
     }));
-  }, []);
+  }, [setLocalData]);
 
   const regeneratePlan = useCallback(() => {
-    setData((current) => ({ ...current, plan: buildPlan(current) }));
-  }, [buildPlan]);
+    setLocalData((current) => ({ ...current, plan: buildPlan(current) }));
+  }, [buildPlan, setLocalData]);
 
   const markPlanEntryComplete = useCallback((entryID: string) => {
-    setData((current) => {
+    setLocalData((current) => {
       if (!current.plan) return current;
       return {
         ...current,
@@ -682,11 +674,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         },
       };
     });
-  }, []);
+  }, [setLocalData]);
 
   /** Erases all practice data while keeping the account and profile. */
   const deleteAllPracticeData = useCallback(() => {
-    setData((current) => ({
+    setLocalData((current) => ({
       ...current,
       sessions: [],
       mechanicHistory: [],
@@ -695,12 +687,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       plan: null,
       profile: { ...current.profile, hasCompletedBaselineAssessment: false },
     }));
-  }, []);
+  }, [setLocalData]);
 
   const deleteEverything = useCallback(() => {
     if (accountID) deleteAccountData(accountID);
     setData(emptyAccountData());
   }, [accountID]);
+
+  const applyRemote = useCallback((remote: AccountData) => {
+    setData(remote);
+  }, []);
 
   const achievements = useMemo(
     () => [...data.achievements].sort((a, b) => b.earnedAt - a.earnedAt),
@@ -746,8 +742,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       achievements,
       deleteAllPracticeData,
       deleteEverything,
+      applyRemote,
     }),
     [
+      applyRemote,
       data,
       completedSessions,
       isLoaded,

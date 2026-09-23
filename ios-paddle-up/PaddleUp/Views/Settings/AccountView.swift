@@ -8,6 +8,8 @@ import SwiftUI
 struct AccountView: View {
     @Environment(AppState.self) private var appState
     @Environment(AuthService.self) private var auth
+    @Environment(CloudAuthService.self) private var cloudAuth
+    @Environment(CloudSyncService.self) private var sync
     @Environment(\.dismiss) private var dismiss
 
     @State private var displayName = ""
@@ -65,7 +67,9 @@ struct AccountView: View {
             } header: {
                 Text("Danger zone")
             } footer: {
-                Text("Deleting your data permanently removes your profile, sessions, reps, clips and ratings from this device.")
+                Text(cloudAuth.isSignedIn
+                     ? "Deleting your data permanently removes your profile, sessions, reps, clips and ratings from this device and from Paddle Up Cloud."
+                     : "Deleting your data permanently removes your profile, sessions, reps, clips and ratings from this device.")
             }
             .listRowBackground(PUColor.surface)
         }
@@ -77,11 +81,18 @@ struct AccountView: View {
         .alert("Delete all data?", isPresented: $showingDeleteAccount) {
             Button("Cancel", role: .cancel) {}
             Button("Delete permanently", role: .destructive) {
-                appState.deleteEverything()
-                appState.unload()
-                let account = auth.ensureLocalAccount()
-                appState.load(accountID: account.id, email: account.email,
-                              displayName: account.displayName)
+                Task {
+                    // Delete the cloud copy first, or the next sync would restore it.
+                    if cloudAuth.isSignedIn {
+                        _ = await sync.deleteCloudData()
+                        cloudAuth.signOut()
+                    }
+                    appState.deleteEverything()
+                    appState.unload()
+                    let account = auth.ensureLocalAccount()
+                    appState.load(accountID: account.id, email: account.email,
+                                  displayName: account.displayName)
+                }
             }
         } message: {
             Text("This cannot be undone. Your profile, sessions, reps and clips will be erased.")

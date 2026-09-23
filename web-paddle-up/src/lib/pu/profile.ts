@@ -15,40 +15,106 @@ export interface Option<T extends string> {
   icon?: string;
 }
 
-export type SkillLevel =
-  | "justStarting"
+/**
+ * The player's level as a DUPR band. Players who know their DUPR pick the band
+ * it falls in; players who don't pick by the plain-language label. Only the
+ * band is stored — never a precise rating.
+ */
+export type DuprRange =
   | "beginner"
+  | "lowerIntermediate"
   | "intermediate"
+  | "upperIntermediate"
   | "advanced"
-  | "competitive";
+  | "advancedPlus"
+  | "pro";
 
-export const skillLevels: Option<SkillLevel>[] = [
-  {
-    id: "justStarting",
-    displayName: "Just Starting",
-    detail: "First season — learning how the game flows",
-  },
+export interface DuprRangeOption {
+  id: DuprRange;
+  rangeLabel: string;
+  displayName: string;
+  detail: string;
+}
+
+export const duprRanges: DuprRangeOption[] = [
   {
     id: "beginner",
+    rangeLabel: "2.0–2.49",
     displayName: "Beginner",
-    detail: "New to pickleball or still learning the basics",
+    detail: "Learning the rules, the serve and keeping a rally going",
+  },
+  {
+    id: "lowerIntermediate",
+    rangeLabel: "2.5–2.99",
+    displayName: "Lower Intermediate",
+    detail: "Rallying comfortably, starting to play at the kitchen",
   },
   {
     id: "intermediate",
+    rangeLabel: "3.0–3.49",
     displayName: "Intermediate",
-    detail: "Comfortable rallying, working on consistency",
+    detail: "Dinking with control, working on the third shot",
+  },
+  {
+    id: "upperIntermediate",
+    rangeLabel: "3.5–3.99",
+    displayName: "Upper Intermediate",
+    detail: "Consistent drops and resets, playing with intent",
   },
   {
     id: "advanced",
+    rangeLabel: "4.0–4.49",
     displayName: "Advanced",
-    detail: "Strong kitchen game, playing regularly",
+    detail: "Strong hands battles, attacking the right balls",
   },
   {
-    id: "competitive",
-    displayName: "Competitive",
-    detail: "Tournament player chasing marginal gains",
+    id: "advancedPlus",
+    rangeLabel: "4.5–4.99",
+    displayName: "Advanced+",
+    detail: "Tournament-level consistency under pressure",
+  },
+  {
+    id: "pro",
+    rangeLabel: "5.0+",
+    displayName: "Pro",
+    detail: "Competing at the top of the sport",
   },
 ];
+
+export function duprRangeOption(range: DuprRange): DuprRangeOption {
+  return duprRanges.find((option) => option.id === range) ?? duprRanges[1];
+}
+
+/** "3.0–3.49 · Intermediate". */
+export function duprFullLabel(range: DuprRange): string {
+  const option = duprRangeOption(range);
+  return `${option.rangeLabel} · ${option.displayName}`;
+}
+
+/** Ordinal position, for "at or above" comparisons. */
+export function duprOrder(range: DuprRange): number {
+  return duprRanges.findIndex((option) => option.id === range);
+}
+
+/**
+ * Maps the retired five-step skill level onto the nearest DUPR band so data
+ * saved before schema v2 keeps a sensible level.
+ */
+export function migrateLegacySkillLevel(raw: unknown): DuprRange | undefined {
+  switch (raw) {
+    case "justStarting":
+    case "beginner":
+      return "beginner";
+    case "intermediate":
+      return "intermediate";
+    case "advanced":
+      return "upperIntermediate";
+    case "competitive":
+      return "advanced";
+    default:
+      return undefined;
+  }
+}
 
 export type PlayerStyle =
   | "aggressive"
@@ -70,76 +136,6 @@ export const playerStyles: Option<PlayerStyle>[] = [
     icon: "CircleHelp",
   },
 ];
-
-export type BiggestWeakness =
-  | "serve"
-  | "returnShot"
-  | "dinking"
-  | "thirdShotDrop"
-  | "drive"
-  | "volley"
-  | "lob"
-  | "footwork"
-  | "strategy"
-  | "mentalGame";
-
-export const biggestWeaknesses: Option<BiggestWeakness>[] = [
-  { id: "serve", displayName: "Serve" },
-  { id: "returnShot", displayName: "Return" },
-  { id: "dinking", displayName: "Dinking" },
-  { id: "thirdShotDrop", displayName: "Third-shot drop" },
-  { id: "drive", displayName: "Drive" },
-  { id: "volley", displayName: "Volley" },
-  { id: "lob", displayName: "Lob" },
-  { id: "footwork", displayName: "Footwork" },
-  { id: "strategy", displayName: "Strategy" },
-  { id: "mentalGame", displayName: "Mental game" },
-];
-
-/** How the weakness reads inside the "biggest opportunity" headline. */
-export const weaknessFocusName: Record<BiggestWeakness, string> = {
-  serve: "Serve",
-  returnShot: "Return",
-  dinking: "Dinking",
-  thirdShotDrop: "Third-shot drops",
-  drive: "Drives",
-  volley: "Volleys",
-  lob: "Lob defence",
-  footwork: "Footwork",
-  strategy: "Strategy",
-  mentalGame: "Mental game",
-};
-
-export type Competitiveness =
-  | "fun"
-  | "recreational"
-  | "veryCompetitive"
-  | "league"
-  | "tournament";
-
-export const competitivenessOptions: Option<Competitiveness>[] = [
-  { id: "fun", displayName: "Just here for fun" },
-  { id: "recreational", displayName: "Recreational" },
-  { id: "veryCompetitive", displayName: "Very competitive" },
-  { id: "league", displayName: "League player" },
-  { id: "tournament", displayName: "Tournament player" },
-];
-
-/** Multiplies the prescribed rep counts. */
-export const competitivenessRepScale: Record<Competitiveness, number> = {
-  fun: 0.85,
-  recreational: 1.0,
-  veryCompetitive: 1.1,
-  league: 1.15,
-  tournament: 1.25,
-};
-
-/** True when the plan should include scored, pressure-style work. */
-export function wantsPressureWork(value: Competitiveness): boolean {
-  return (
-    value === "veryCompetitive" || value === "league" || value === "tournament"
-  );
-}
 
 export type SuccessMetric =
   | "fewerErrors"
@@ -249,25 +245,6 @@ export const practiceDaysPerWeek: Record<WeeklyTrainingTime, number> = {
   elite: 5,
 };
 
-export type TrainingMotivation =
-  | "confidence"
-  | "beatFriends"
-  | "improveDUPR"
-  | "winMore"
-  | "tournaments"
-  | "competitivePlayer"
-  | "fun";
-
-export const trainingMotivations: Option<TrainingMotivation>[] = [
-  { id: "confidence", displayName: "Play more confidently" },
-  { id: "beatFriends", displayName: "Beat my friends" },
-  { id: "improveDUPR", displayName: "Improve my DUPR" },
-  { id: "winMore", displayName: "Win more games" },
-  { id: "tournaments", displayName: "Prepare for tournaments" },
-  { id: "competitivePlayer", displayName: "Become a competitive player" },
-  { id: "fun", displayName: "Just have more fun playing" },
-];
-
 export type PlayFrequency = "rarely" | "weekly" | "fewTimesWeek" | "daily";
 
 export const playFrequencies: Option<PlayFrequency>[] = [
@@ -282,15 +259,13 @@ export type Handedness = "right" | "left";
 export interface PlayerProfile {
   displayName: string;
   email: string;
-  skillLevel: SkillLevel;
+  /** The selected DUPR band. Undefined until the player picks one. */
+  duprRange?: DuprRange;
   handedness: Handedness;
   playerTypes: PlayerStyle[];
   goals: TrainingGoal[];
   struggles: BiggestStruggle[];
-  weaknesses: BiggestWeakness[];
   trainingTime: WeeklyTrainingTime;
-  motivation?: TrainingMotivation;
-  competitiveness?: Competitiveness;
   successMetric?: SuccessMetric;
   frequency: PlayFrequency;
   heightCentimetres: number;
@@ -303,12 +278,10 @@ export function emptyProfile(): PlayerProfile {
   return {
     displayName: "",
     email: "",
-    skillLevel: "intermediate",
     handedness: "right",
     playerTypes: [],
     goals: [],
     struggles: [],
-    weaknesses: [],
     trainingTime: "moderate",
     frequency: "weekly",
     heightCentimetres: 178,
@@ -358,6 +331,23 @@ export interface RepRecord {
   poseFrames: PoseFrame[];
   rubricVersion: number;
   benchmarkVersion: string;
+
+  // Ball & paddle data — reserved, not yet measured. Paddle Up only measures
+  // the body today; these stay null and nothing estimates or fills them.
+  /** Ball speed off the paddle, in mph. */
+  ballSpeedMPH: number | null;
+  /** Ball spin, in revolutions per minute. */
+  spinRPM: number | null;
+  /** Paddle face angle at contact, in degrees from vertical. */
+  paddleFaceAngleDegrees: number | null;
+  /** How close contact was to the ideal moment, in ms (lower is better). */
+  contactTimingPrecisionMS: number | null;
+
+  /**
+   * True when the player had opted in to share anonymized data when this rep
+   * was recorded. Only flags the record — nothing is sent anywhere.
+   */
+  sharedForResearch: boolean;
 }
 
 export function mechanicOf(
@@ -384,6 +374,11 @@ export interface SessionRecord {
   drillID?: string;
   reps: RepRecord[];
   focusCue?: string;
+  /**
+   * True when the player had opted in to share anonymized data when this
+   * session was recorded. Only flags the record — nothing is sent anywhere.
+   */
+  sharedForResearch?: boolean;
 }
 
 export function activeReps(session: SessionRecord): RepRecord[] {
@@ -504,7 +499,15 @@ export interface UserFeedbackRecord {
 
 export function newRep(input: Omit<
   RepRecord,
-  "id" | "isDeleted" | "wasReclassified" | "benchmarkVersion"
+  | "id"
+  | "isDeleted"
+  | "wasReclassified"
+  | "benchmarkVersion"
+  | "ballSpeedMPH"
+  | "spinRPM"
+  | "paddleFaceAngleDegrees"
+  | "contactTimingPrecisionMS"
+  | "sharedForResearch"
 >): RepRecord {
   return {
     ...input,
@@ -512,6 +515,23 @@ export function newRep(input: Omit<
     isDeleted: false,
     wasReclassified: false,
     benchmarkVersion: BENCHMARK_VERSION,
+    ballSpeedMPH: null,
+    spinRPM: null,
+    paddleFaceAngleDegrees: null,
+    contactTimingPrecisionMS: null,
+    sharedForResearch: false,
+  };
+}
+
+/** Fills fields added in schema v2 on reps saved by older versions. */
+export function normalizeRep(rep: Partial<RepRecord> & RepRecord): RepRecord {
+  return {
+    ...rep,
+    ballSpeedMPH: rep.ballSpeedMPH ?? null,
+    spinRPM: rep.spinRPM ?? null,
+    paddleFaceAngleDegrees: rep.paddleFaceAngleDegrees ?? null,
+    contactTimingPrecisionMS: rep.contactTimingPrecisionMS ?? null,
+    sharedForResearch: rep.sharedForResearch ?? false,
   };
 }
 

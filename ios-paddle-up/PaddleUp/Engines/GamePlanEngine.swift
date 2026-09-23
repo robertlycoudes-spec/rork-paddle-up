@@ -2,10 +2,18 @@
 //  GamePlanEngine.swift
 //  PaddleUp
 //
-//  Turns onboarding answers into a personalised game plan: the player's
-//  biggest opportunity, a this-week prescription, and a weekly plan wired to
-//  the real drill library. Deterministic and pure — the same answers always
-//  produce the same plan, so the "AI result" is reproducible and testable.
+//  Builds the player's game plan. Two inputs drive it:
+//
+//    1. The player's DUPR range — sets the starting curriculum, drill
+//       difficulty and training volume.
+//    2. Measured practice data — once sessions exist, the mechanics that
+//       actually score lowest take over the plan's lead slots.
+//
+//  The remaining onboarding answers (style, goals, struggles, weekly time,
+//  success metric) only fine-tune volume and add extra plan lines; they never
+//  choose the core focus. A brand-new player with no sessions gets the
+//  curriculum for their range. Deterministic and pure — the same inputs always
+//  produce the same plan, so it is reproducible and testable.
 //
 
 import Foundation
@@ -13,15 +21,13 @@ import Foundation
 /// Everything the onboarding flow collects, in order.
 nonisolated struct OnboardingAnswers: Codable, Sendable, Equatable {
     var name: String = ""
-    var level: SkillLevel = .intermediate
+    /// `nil` until the player picks a range.
+    var duprRange: DuprRange?
     var playerTypes: [PlayerStyle] = []
     var frequency: PlayFrequency = .weekly
     var goals: [TrainingGoal] = []
     var struggles: [BiggestStruggle] = []
-    var weaknesses: [BiggestWeakness] = []
     var trainingTime: WeeklyTrainingTime = .moderate
-    var motivation: TrainingMotivation?
-    var competitiveness: Competitiveness?
     var successMetric: SuccessMetric?
 }
 
@@ -35,10 +41,9 @@ nonisolated struct GamePlanItem: Identifiable, Sendable, Equatable {
     let symbol: String
 }
 
-/// The personalised result shown before the paywall and stored as the
-/// player's active plan.
+/// The personalised result shown before the paywall.
 nonisolated struct GamePlan: Sendable, Equatable {
-    /// e.g. "Consistency + third-shot drops"
+    /// e.g. "Third-shot drops + dinking"
     let opportunity: String
     /// One line explaining why that opportunity matters.
     let opportunityDetail: String
@@ -49,42 +54,73 @@ nonisolated struct GamePlan: Sendable, Equatable {
     let practiceDays: Int
 }
 
+/// A measured weak spot from real reps: the shot and the mechanic that scored lowest.
+nonisolated struct MeasuredFocus: Sendable, Equatable {
+    let shot: ShotType
+    let mechanic: MechanicID
+}
+
 nonisolated enum GamePlanEngine {
 
-    // MARK: - Focus areas
+    /// Range used when a player has not picked one (legacy profiles only —
+    /// onboarding requires a pick).
+    static let defaultRange: DuprRange = .lowerIntermediate
 
-    /// Goals ranked by priority: the named weakness leads (it is the most
-    /// specific answer the player gives), then struggles (their own pain), then
-    /// stated goals. Mapped onto the TrainingGoal vocabulary so the rest of the
-    /// engine only deals with one taxonomy.
-    static func focusAreas(for answers: OnboardingAnswers) -> [TrainingGoal] {
-        let fromWeakness = answers.weaknesses.compactMap(weaknessGoal)
-        let fromStruggles = answers.struggles.compactMap(struggleGoal)
-        var merged: [TrainingGoal] = []
-        for goal in fromWeakness + fromStruggles + answers.goals where !merged.contains(goal) {
-            merged.append(goal)
-        }
-        return merged.isEmpty ? [.consistency] : merged
-    }
+    // MARK: - Level curriculum
 
-    /// Weaknesses that map onto a trainable shot skill. Lob and mental game
-    /// return nil and get their own dedicated plan lines instead.
-    static func weaknessGoal(_ weakness: BiggestWeakness) -> TrainingGoal? {
-        switch weakness {
-        case .serve: return .serve
-        case .returnShot: return .returnOfServe
-        case .dinking: return .dinking
-        case .thirdShotDrop: return .thirdShotDrops
-        case .drive: return .drives
-        case .volley: return .volleys
-        case .footwork: return .speedReaction
-        case .strategy: return .strategyIQ
-        case .lob, .mentalGame: return nil
+    /// The skills a player in this range should build first, in priority
+    /// order. This is the plan for a brand-new player with no sessions.
+    static func curriculum(for range: DuprRange) -> [TrainingGoal] {
+        switch range {
+        case .beginner: return [.consistency, .dinking, .serve]
+        case .lowerIntermediate: return [.dinking, .consistency, .returnOfServe]
+        case .intermediate: return [.thirdShotDrops, .dinking, .consistency]
+        case .upperIntermediate: return [.thirdShotDrops, .volleys, .dinking]
+        case .advanced: return [.volleys, .thirdShotDrops, .drives]
+        case .advancedPlus: return [.volleys, .drives, .speedReaction]
+        case .pro: return [.speedReaction, .volleys, .drives]
         }
     }
 
-    /// Struggles that don't map to a shot skill (conditioning, direction)
-    /// return nil and are handled as extra plan lines instead.
+    /// Multiplies prescribed rep counts: newer players start lighter.
+    static func volumeScale(for range: DuprRange) -> Double {
+        switch range {
+        case .beginner: return 0.7
+        case .lowerIntermediate: return 0.85
+        case .intermediate: return 1.0
+        case .upperIntermediate: return 1.1
+        case .advanced: return 1.2
+        case .advancedPlus: return 1.3
+        case .pro: return 1.4
+        }
+    }
+
+    /// Advanced ranges rehearse pressure, not just technique.
+    static func wantsPressureWork(_ range: DuprRange) -> Bool { range >= .advanced }
+
+    private static func levelNarrative(_ range: DuprRange) -> String {
+        switch range {
+        case .beginner:
+            return "At 2.0–2.49 the fastest gains come from keeping the ball in play. We'll build a repeatable contact point and a reliable serve before anything else."
+        case .lowerIntermediate:
+            return "At 2.5–2.99 points are won and lost at the kitchen. We'll build a controlled dink and a deep return so you can get there and stay there."
+        case .intermediate:
+            return "At 3.0–3.49 the third shot decides whether you reach the kitchen at all. We'll build your drop on top of a steady dink."
+        case .upperIntermediate:
+            return "At 3.5–3.99 the gap is consistency under pace — clean drops, quiet hands at the line, and volleys that don't pop up."
+        case .advanced:
+            return "At 4.0–4.49 hands battles and shot selection decide games. We'll sharpen your volleys and keep your drop reliable when it matters."
+        case .advancedPlus:
+            return "At 4.5–4.99 the margins are small. We'll tighten your volley shape, add depth to your drives and speed up your first step."
+        case .pro:
+            return "At 5.0+ every rep is about marginal gains — reaction speed, a stable paddle in fast exchanges and drives with intent."
+        }
+    }
+
+    // MARK: - Onboarding result
+
+    /// Maps a struggle onto the shared TrainingGoal vocabulary. Struggles that
+    /// don't map to a shot skill (direction, conditioning) return nil.
     static func struggleGoal(_ struggle: BiggestStruggle) -> TrainingGoal? {
         switch struggle {
         case .unforcedErrors: return .consistency
@@ -98,121 +134,65 @@ nonisolated enum GamePlanEngine {
         }
     }
 
-    // MARK: - The personalised result
+    /// The core focus areas: the range's curriculum. Personal answers never
+    /// reorder it — they only add extra lines in `generate`.
+    static func focusAreas(for answers: OnboardingAnswers) -> [TrainingGoal] {
+        curriculum(for: answers.duprRange ?? defaultRange)
+    }
 
     static func generate(_ answers: OnboardingAnswers) -> GamePlan {
-        let areas = focusAreas(for: answers)
+        let range = answers.duprRange ?? defaultRange
+        let areas = curriculum(for: range)
         let primary = areas[0]
-        let secondary = areas.count > 1 ? areas[1] : nil
-
-        // The named weaknesses headline the opportunity when the player gave
-        // them; a single weakness is paired with the next focus area.
-        var names: [String] = []
-        if let first = answers.weaknesses.first {
-            names.append(first.focusName)
-            if let second = answers.weaknesses.dropFirst().first {
-                names.append(second.focusName.lowercased())
-            } else if let secondary {
-                names.append(secondary.displayName.lowercased())
-            }
-        }
-        if names.isEmpty { names = [primary.displayName] }
-        let opportunity = names.joined(separator: " + ")
-
-        let scale = answers.trainingTime.repScale
-            * (answers.level == .justStarting ? 0.7 : 1.0)
-            * (answers.competitiveness?.repScale ?? 1.0)
+        let opportunity = "\(primary.displayName) + \(areas[1].displayName.lowercased())"
+        let scale = answers.trainingTime.repScale * volumeScale(for: range)
 
         var items: [GamePlanItem] = []
-        func append(_ goal: TrainingGoal) {
-            guard !items.contains(where: { $0.title == prescriptionTitle(goal) }) else { return }
-            items.append(prescriptionItem(goal, scale: scale))
+        func add(_ item: GamePlanItem) {
+            guard !items.contains(where: { $0.title == item.title }) else { return }
+            items.append(item)
         }
 
-        // Weaknesses with no shot mapping still lead the plan with their own line.
-        for weakness in answers.weaknesses where weaknessGoal(weakness) == nil {
-            let item = weaknessItem(weakness, scale: scale)
-            if !items.contains(where: { $0.title == item.title }) {
-                items.append(item)
-            }
-        }
-        for goal in areas.prefix(3) { append(goal) }
+        // Core: the curriculum for the player's range.
+        for goal in areas { add(prescriptionItem(goal, scale: scale)) }
 
-        // Playing style acts as a counterweight so the plan rounds out the game.
-        // Up to two named styles get their own balancing line, deduped by title.
+        // Fine-tuning: personal answers add lines but never replace the core.
+        if wantsPressureWork(range) {
+            add(GamePlanItem(title: "Scored, game-like reps",
+                             amount: range >= .advancedPlus ? 3 : 2,
+                             unit: "sessions", symbol: "trophy.fill"))
+        }
+        for goal in (answers.struggles.compactMap(struggleGoal) + answers.goals) where !areas.contains(goal) {
+            add(prescriptionItem(goal, scale: scale))
+        }
         for style in answers.playerTypes.prefix(2) {
-            let item = styleItem(for: style, scale: scale)
-            if !items.contains(where: { $0.title == item.title }) {
-                items.append(item)
-            }
+            add(styleItem(for: style, scale: scale))
         }
-
-        // Extra lines driven by the unmappable struggles.
         if answers.struggles.contains(.whatToPractice) {
-            items.append(GamePlanItem(
-                title: "Guided sessions with your AI coach",
-                amount: 3, unit: "sessions", symbol: "waveform"
-            ))
+            add(GamePlanItem(title: "Guided sessions with your AI coach",
+                             amount: 3, unit: "sessions", symbol: "waveform"))
         }
-        if answers.struggles.contains(.fitness) || answers.goals.contains(.speedReaction) {
-            if !items.contains(where: { $0.unit == "min" }) {
-                items.append(GamePlanItem(
-                    title: "Footwork & conditioning",
-                    amount: scaled(10, scale), unit: "min", symbol: "figure.run"
-                ))
-            }
+        if answers.struggles.contains(.fitness), !items.contains(where: { $0.unit == "min" }) {
+            add(GamePlanItem(title: "Footwork & conditioning",
+                             amount: scaled(10, scale), unit: "min", symbol: "figure.run"))
         }
-        if answers.goals.contains(.strategyIQ) || answers.struggles.contains(.betterPlayers) {
-            if !items.contains(where: { $0.title.contains("strategy") }) {
-                items.append(GamePlanItem(
-                    title: "Strategy sessions",
-                    amount: 2, unit: "sessions", symbol: "brain.head.profile"
-                ))
-            }
-        }
-        // Competitive players rehearse pressure, not just technique.
-        if answers.competitiveness?.wantsPressureWork == true,
-           !items.contains(where: { $0.title == "Scored, game-like reps" }) {
-            items.append(GamePlanItem(
-                title: "Scored, game-like reps",
-                amount: answers.competitiveness == .tournament ? 3 : 2,
-                unit: "sessions", symbol: "trophy.fill"
-            ))
-        }
-        // Always give the plan a reaction line for competitive motivation.
-        if answers.motivation == .tournaments || answers.motivation == .competitivePlayer,
-           !items.contains(where: { $0.title == "Reaction drills" }) {
-            items.append(GamePlanItem(
-                title: "Reaction drills",
-                amount: 3, unit: "drills", symbol: "bolt.fill"
-            ))
-        }
-
-        // Keep the reveal glanceable — the plan adapts weekly anyway.
-        let trimmed = Array(items.prefix(5))
 
         return GamePlan(
             opportunity: opportunity,
-            opportunityDetail: detailNarrative(for: answers, primary: primary),
-            items: trimmed,
+            opportunityDetail: detailNarrative(range: range, answers: answers),
+            // Keep the reveal glanceable — the plan adapts weekly anyway.
+            items: Array(items.prefix(5)),
             focusCue: focusCue(for: answers, primary: primary),
             weeklyMinutes: answers.trainingTime.weeklyMinutes,
             practiceDays: answers.trainingTime.practiceDaysPerWeek
         )
     }
 
-    /// Dedicated line for a weakness that isn't a measurable shot skill yet.
-    private static func weaknessItem(_ weakness: BiggestWeakness, scale: Double) -> GamePlanItem {
-        switch weakness {
-        case .lob:
-            return GamePlanItem(title: "Overhead & lob defence reps",
-                                amount: scaled(20, scale), unit: "reps", symbol: "arrow.up.right")
-        case .mentalGame:
-            return GamePlanItem(title: "Pressure reps — play to a score",
-                                amount: 3, unit: "sessions", symbol: "brain.head.profile")
-        default:
-            return prescriptionItem(weaknessGoal(weakness) ?? .consistency, scale: scale)
-        }
+    private static func detailNarrative(range: DuprRange, answers: OnboardingAnswers) -> String {
+        var sentences: [String] = [levelNarrative(range)]
+        if let style = answers.playerTypes.first { sentences.append(styleClause(style)) }
+        if let metric = answers.successMetric { sentences.append(successClause(metric)) }
+        return sentences.joined(separator: " ")
     }
 
     /// A counterweight line chosen from one of the player's self-described styles.
@@ -239,42 +219,7 @@ nonisolated enum GamePlanEngine {
         }
     }
 
-    /// Builds the "why this matters" paragraph out of the player's own answers:
-    /// their weakness, their style, and their definition of success.
-    private static func detailNarrative(for answers: OnboardingAnswers,
-                                        primary: TrainingGoal) -> String {
-        var sentences: [String] = []
-
-        if !answers.weaknesses.isEmpty {
-            sentences.append(contentsOf: answers.weaknesses.prefix(2).map(weaknessDetail))
-        } else {
-            sentences.append(opportunityDetail(primary))
-        }
-        if let style = answers.playerTypes.first, let clause = styleClause(style, answers: answers) {
-            sentences.append(clause)
-        }
-        if let metric = answers.successMetric {
-            sentences.append(successClause(metric, answers: answers))
-        }
-        return sentences.joined(separator: " ")
-    }
-
-    private static func weaknessDetail(_ weakness: BiggestWeakness) -> String {
-        switch weakness {
-        case .serve: return "You named your serve — the one shot nobody can rush. We'll make it repeatable before we make it bigger."
-        case .returnShot: return "You named your return. A deep return buys you the kitchen, and it's the fastest gain most players skip."
-        case .dinking: return "You named your dinks. Kitchen points reward patience and placement, so we'll build your soft game first."
-        case .thirdShotDrop: return "You named your third-shot drop — the shot that decides whether you reach the kitchen at all."
-        case .drive: return "You named your drive. Depth and shape come before pace, or the ball just comes back faster."
-        case .volley: return "You named your volleys. Holding the line under pressure starts with a stable paddle and a short punch."
-        case .lob: return "You named the lob. Reading it early and turning under the ball turns a scramble into an easy overhead."
-        case .footwork: return "You named your footwork. Almost every technique fault is really a position fault one step earlier."
-        case .strategy: return "You named strategy. Shot selection beats shot-making at every level, so we'll train your decisions."
-        case .mentalGame: return "You named the mental game. We'll train it the only way it improves: scored reps where the pressure is real."
-        }
-    }
-
-    private static func styleClause(_ style: PlayerStyle, answers: OnboardingAnswers) -> String? {
+    private static func styleClause(_ style: PlayerStyle) -> String {
         switch style {
         case .aggressive:
             return "You play aggressive, so we keep your pace and add a reliable soft option — attack from the kitchen, not from no-man's land."
@@ -291,7 +236,7 @@ nonisolated enum GamePlanEngine {
         }
     }
 
-    private static func successClause(_ metric: SuccessMetric, answers: OnboardingAnswers) -> String {
+    private static func successClause(_ metric: SuccessMetric) -> String {
         switch metric {
         case .fewerErrors:
             return "You'll know it's working when your unforced errors drop — that's the number we track first."
@@ -326,68 +271,34 @@ nonisolated enum GamePlanEngine {
     }
 
     private static func prescriptionItem(_ goal: TrainingGoal, scale: Double) -> GamePlanItem {
+        let title = prescriptionTitle(goal)
         switch goal {
         case .consistency:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(30, scale),
-                                unit: "reps", symbol: "target")
+            return GamePlanItem(title: title, amount: scaled(30, scale), unit: "reps", symbol: "target")
         case .serve:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(36, scale),
-                                unit: "reps", symbol: "hand.raised")
+            return GamePlanItem(title: title, amount: scaled(36, scale), unit: "reps", symbol: "hand.raised")
         case .returnOfServe:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(24, scale),
-                                unit: "reps", symbol: "arrow.uturn.left")
+            return GamePlanItem(title: title, amount: scaled(24, scale), unit: "reps", symbol: "arrow.uturn.left")
         case .dinking:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(30, scale),
-                                unit: "reps", symbol: "circle.grid.cross")
+            return GamePlanItem(title: title, amount: scaled(30, scale), unit: "reps", symbol: "circle.grid.cross")
         case .thirdShotDrops:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(40, scale),
-                                unit: "reps", symbol: "scope")
+            return GamePlanItem(title: title, amount: scaled(40, scale), unit: "reps", symbol: "scope")
         case .drives:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(30, scale),
-                                unit: "reps", symbol: "bolt.horizontal")
+            return GamePlanItem(title: title, amount: scaled(30, scale), unit: "reps", symbol: "bolt.horizontal")
         case .volleys:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(40, scale),
-                                unit: "reps", symbol: "square.grid.3x3")
+            return GamePlanItem(title: title, amount: scaled(40, scale), unit: "reps", symbol: "square.grid.3x3")
         case .speedReaction:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: scaled(10, scale),
-                                unit: "min", symbol: "hare")
+            return GamePlanItem(title: title, amount: scaled(10, scale), unit: "min", symbol: "hare")
         case .strategyIQ:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: 2,
-                                unit: "sessions", symbol: "brain.head.profile")
+            return GamePlanItem(title: title, amount: 2, unit: "sessions", symbol: "brain.head.profile")
         case .competitive:
-            return GamePlanItem(title: prescriptionTitle(goal), amount: 3,
-                                unit: "drills", symbol: "bolt.fill")
+            return GamePlanItem(title: title, amount: 3, unit: "drills", symbol: "bolt.fill")
         }
     }
 
     /// Scales a rep count and rounds to a clean, credible number.
     private static func scaled(_ base: Int, _ scale: Double) -> Int {
         max(5, Int((Double(base) * scale / 5).rounded() * 5))
-    }
-
-    private static func opportunityDetail(_ goal: TrainingGoal) -> String {
-        switch goal {
-        case .consistency:
-            return "Unforced errors decide more amateur games than winners do. We'll tighten your contact point first."
-        case .serve:
-            return "The only shot you fully control. A repeatable serve starts every point on your terms."
-        case .returnOfServe:
-            return "A deep return buys you the kitchen. It's the fastest rating gain most players ignore."
-        case .dinking:
-            return "Kitchen points are won by patience and placement, not power. We'll build your soft game."
-        case .thirdShotDrops:
-            return "Your third shot decides whether you reach the kitchen — we'll build it rep by rep."
-        case .drives:
-            return "Penetrating drives create weak replies you can attack. Depth targets first."
-        case .volleys:
-            return "Clean volleys let you hold the line under pressure. We'll keep your shape stable."
-        case .speedReaction:
-            return "First-step quickness wins the tight exchanges. Short, sharp footwork blocks."
-        case .strategyIQ:
-            return "Shot selection beats shot-making at every level. We'll train your decisions."
-        case .competitive:
-            return "Competitors rehearse pressure. Your plan mixes skills with scored, game-like reps."
-        }
     }
 
     /// The single cue the coach repeats first, nudged by playing style.
@@ -399,8 +310,6 @@ nonisolated enum GamePlanEngine {
         if answers.playerTypes.contains(.defensive), primary == .drives || primary == .volleys {
             return "Step in early, finish through the ball"
         }
-        if answers.weaknesses.contains(.lob) { return "Turn and track — get behind the ball" }
-        if answers.weaknesses.contains(.mentalGame) { return "One point at a time, reset between reps" }
         return focusCue(primary)
     }
 
@@ -421,25 +330,21 @@ nonisolated enum GamePlanEngine {
 
     // MARK: - Wiring into the app
 
-    /// The shot the player should practise first, from a saved profile.
+    /// The shot a player should practise first when they have no sessions yet.
     static func focusShot(for profile: PlayerProfile) -> ShotType {
-        return shot(for: focusAreas(for: answers(from: profile))[0])
+        shot(for: curriculum(for: profile.duprRange ?? defaultRange)[0])
     }
 
-    /// Rebuilds the onboarding answers from a saved profile, so every feature
-    /// personalises from the same inputs the plan was generated with.
+    /// Rebuilds the onboarding answers from a saved profile.
     static func answers(from profile: PlayerProfile) -> OnboardingAnswers {
         var answers = OnboardingAnswers()
         answers.name = profile.displayName
-        answers.level = profile.skillLevel
+        answers.duprRange = profile.duprRange
         answers.playerTypes = profile.playerTypes
         answers.frequency = profile.frequency
         answers.goals = profile.goals
         answers.struggles = profile.struggles
-        answers.weaknesses = profile.weaknesses
         answers.trainingTime = profile.trainingTime
-        answers.motivation = profile.motivation
-        answers.competitiveness = profile.competitiveness
         answers.successMetric = profile.successMetric
         return answers
     }
@@ -469,50 +374,75 @@ nonisolated enum GamePlanEngine {
         }
     }
 
-    /// The active weekly plan, built from onboarding answers, ending in a
-    /// baseline assessment so improvement can be measured.
-    static func weeklyPlan(from answers: OnboardingAnswers) -> WeeklyPlan {
-        let areas = Array(focusAreas(for: answers).prefix(3))
+    /// Picks a drill for a mechanic that suits the player's range, preferring
+    /// drills at or below their level.
+    static func drillID(for mechanic: MechanicID, shot: ShotType, range: DuprRange) -> String {
+        let suitable = DrillLibrary.all.filter { $0.minimumLevel <= range }
+        let pick = suitable.first { $0.targetMechanic == mechanic && $0.shot == shot }
+            ?? suitable.first { $0.targetMechanic == mechanic && $0.shot.group == shot.group }
+            ?? DrillLibrary.drill(for: mechanic, shot: shot)
+        return pick?.id ?? DrillLibrary.all[0].id
+    }
 
-        let daySlots: [Int]
-        switch answers.trainingTime.practiceDaysPerWeek {
-        case ...2: daySlots = [2, 5]
-        case 3: daySlots = [2, 4, 6]
-        case 4: daySlots = [2, 3, 5, 6]
-        default: daySlots = [2, 3, 4, 5, 6]
+    /// Practice weekdays (1 = Sunday) for the player's weekly time budget.
+    static func practiceWeekdays(for time: WeeklyTrainingTime) -> [Int] {
+        switch time.practiceDaysPerWeek {
+        case ...2: return [2, 5]
+        case 3: return [2, 4, 6]
+        case 4: return [2, 3, 5, 6]
+        default: return [2, 3, 4, 5, 6]
+        }
+    }
+
+    /// The weekly plan. Measured weak spots (from real reps) lead; any
+    /// remaining slots come from the range curriculum. With no measured data
+    /// the whole week is the curriculum — the default for a brand-new player.
+    /// Every week ends with a Sunday assessment so change is measured.
+    ///
+    /// - Parameters:
+    ///   - measured: Weakest measured shot/mechanic pairs, most important first.
+    ///   - leadInsight: Human-readable name of the top recurring issue, if any.
+    static func weeklyPlan(profile: PlayerProfile,
+                           measured: [MeasuredFocus],
+                           leadInsight: String? = nil,
+                           now: Date = .now) -> WeeklyPlan {
+        let range = profile.duprRange ?? defaultRange
+        let curriculumFocus = curriculum(for: range).map { MeasuredFocus(shot: shot(for: $0), mechanic: mechanic(for: $0)) }
+
+        var focus: [MeasuredFocus] = []
+        for item in measured.prefix(3) + curriculumFocus where !focus.contains(item) {
+            focus.append(item)
         }
 
-        var entries: [WeeklyPlan.Entry] = daySlots.enumerated().map { index, weekday in
-            let goal = areas[index % areas.count]
-            let shot = shot(for: goal)
-            let mechanic = mechanic(for: goal)
-            return WeeklyPlan.Entry(
-                weekday: weekday,
-                shot: shot,
-                mechanic: mechanic,
-                drillID: DrillLibrary.drill(for: mechanic, shot: shot)?.id ?? DrillLibrary.all[0].id
-            )
-        }
+        var entries: [WeeklyPlan.Entry] = practiceWeekdays(for: profile.trainingTime)
+            .enumerated()
+            .map { index, weekday in
+                let item = focus[index % focus.count]
+                return WeeklyPlan.Entry(
+                    weekday: weekday,
+                    shot: item.shot,
+                    mechanic: item.mechanic,
+                    drillID: drillID(for: item.mechanic, shot: item.shot, range: range)
+                )
+            }
 
-        let assessmentGoal = areas[0]
-        let assessmentShot = shot(for: assessmentGoal)
+        let lead = focus[0]
         entries.append(WeeklyPlan.Entry(
             weekday: 1,
-            shot: assessmentShot,
-            mechanic: mechanic(for: assessmentGoal),
-            drillID: DrillLibrary.drills(for: assessmentShot).first?.id ?? DrillLibrary.all[0].id,
+            shot: lead.shot,
+            mechanic: lead.mechanic,
+            drillID: DrillLibrary.drills(for: lead.shot).first?.id ?? DrillLibrary.all[0].id,
             isAssessment: true
         ))
 
-        let plan = generate(answers)
-        var rationale = "Built from your onboarding: \(plan.opportunity) is your biggest opportunity, with a baseline assessment so Paddle Up can measure whether it moves."
-        if !answers.playerTypes.isEmpty {
-            rationale += " Balanced for a \(answers.playerTypes.prefix(2).map { $0.displayName.lowercased() }.joined(separator: " + ")) player"
-            if let competitiveness = answers.competitiveness {
-                rationale += " training as a \(competitiveness.displayName.lowercased())"
-            }
-            rationale += "."
+        let rationale: String
+        if let leadInsight {
+            rationale = "Built around your recurring \(leadInsight) issue, measured from your reps, with the rest of the week from the \(range.rangeLabel) curriculum and a Sunday assessment to measure whether it moved."
+        } else if !measured.isEmpty {
+            rationale = "Built from the weakest mechanics in your recent sessions, rounded out with the \(range.rangeLabel) curriculum and a Sunday assessment to measure progress."
+        } else {
+            rationale = "A starter week for a \(range.fullLabel) player, ending with an assessment so Paddle Up can measure your baseline. Once you log sessions, your measured weak spots take over the plan."
         }
-        return WeeklyPlan(generatedAt: .now, entries: entries, rationale: rationale)
+        return WeeklyPlan(generatedAt: now, entries: entries, rationale: rationale)
     }
 }

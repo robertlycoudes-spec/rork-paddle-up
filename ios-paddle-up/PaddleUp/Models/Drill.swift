@@ -14,7 +14,7 @@ nonisolated struct Drill: Codable, Sendable, Identifiable, Equatable {
     let shot: ShotType
     /// The mechanic this drill is designed to move.
     let targetMechanic: MechanicID
-    let minimumLevel: SkillLevel
+    let minimumLevel: DuprRange
     let goal: String
     let instructions: [String]
     let sets: Int

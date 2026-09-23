@@ -12,9 +12,13 @@
 import type { WeeklyPlan } from "./game-plan";
 import {
   emptyProfile,
+  migrateLegacySkillLevel,
+  normalizeRep,
   type Achievement,
+  type DuprRange,
   type MechanicHistoryPoint,
   type PlayerProfile,
+  type RepRecord,
   type SessionRecord,
   type UserFeedbackRecord,
 } from "./profile";
@@ -86,6 +90,11 @@ export interface AppSettings {
   developerModeEnabled: boolean;
   analyticsEnabled: boolean;
   defaultSessionLength: SessionLength;
+  /**
+   * Opt-in (default OFF) to share anonymized rep/session data to help improve
+   * scoring. Today this only flags new records; no data is sent.
+   */
+  shareAnonymizedData: boolean;
 }
 
 export function defaultSettings(): AppSettings {
@@ -97,8 +106,15 @@ export function defaultSettings(): AppSettings {
     developerModeEnabled: false,
     analyticsEnabled: true,
     defaultSessionLength: "tenMinutes",
+    shareAnonymizedData: false,
   };
 }
+
+/**
+ * Current schema. v2 introduced DUPR ranges, reserved ball/paddle rep fields,
+ * consent flags and `modifiedAt` for cloud sync.
+ */
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /** The complete persisted state for one account. */
 export interface AccountData {
@@ -110,6 +126,12 @@ export interface AccountData {
   plan: WeeklyPlan | null;
   settings: AppSettings;
   schemaVersion: number;
+  /**
+   * Epoch ms of the last local change. Cloud sync is last-write-wins on this
+   * value — no merging. 0 means "never changed since v1", so never-synced data
+   * cannot beat a newer cloud copy.
+   */
+  modifiedAt: number;
 }
 
 export function emptyAccountData(): AccountData {
@@ -121,7 +143,68 @@ export function emptyAccountData(): AccountData {
     feedback: [],
     plan: null,
     settings: defaultSettings(),
-    schemaVersion: 1,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    modifiedAt: 0,
+  };
+}
+
+type LegacyProfile = Partial<PlayerProfile> & {
+  skillLevel?: unknown;
+  weaknesses?: unknown;
+  motivation?: unknown;
+  competitiveness?: unknown;
+};
+
+const DUPR_IDS: DuprRange[] = [
+  "beginner",
+  "lowerIntermediate",
+  "intermediate",
+  "upperIntermediate",
+  "advanced",
+  "advancedPlus",
+  "pro",
+];
+
+/**
+ * Tolerant decode + migration of raw saved (or synced) data into the current
+ * schema. Every field falls back to its default; retired onboarding fields are
+ * dropped; the old five-step level maps onto a DUPR band.
+ */
+export function migrateAccountData(parsed: Partial<AccountData>): AccountData {
+  const fallback = emptyAccountData();
+  const {
+    skillLevel,
+    weaknesses: _weaknesses,
+    motivation: _motivation,
+    competitiveness: _competitiveness,
+    ...profile
+  } = (parsed.profile ?? {}) as LegacyProfile;
+
+  const storedRange =
+    profile.duprRange && DUPR_IDS.includes(profile.duprRange)
+      ? profile.duprRange
+      : undefined;
+
+  const sessions: SessionRecord[] = (parsed.sessions ?? []).map((session) => ({
+    ...session,
+    sharedForResearch: session.sharedForResearch ?? false,
+    reps: (session.reps ?? []).map((rep) => normalizeRep(rep as RepRecord)),
+  }));
+
+  return {
+    profile: {
+      ...fallback.profile,
+      ...profile,
+      duprRange: storedRange ?? migrateLegacySkillLevel(skillLevel),
+    },
+    sessions,
+    mechanicHistory: parsed.mechanicHistory ?? [],
+    achievements: parsed.achievements ?? [],
+    feedback: parsed.feedback ?? [],
+    plan: parsed.plan ?? null,
+    settings: { ...fallback.settings, ...(parsed.settings ?? {}) },
+    schemaVersion: Math.max(parsed.schemaVersion ?? 1, CURRENT_SCHEMA_VERSION),
+    modifiedAt: typeof parsed.modifiedAt === "number" ? parsed.modifiedAt : 0,
   };
 }
 
@@ -159,20 +242,15 @@ export function loadAccountData(accountID: string): AccountData | null {
   try {
     const raw = localStorage.getItem(storageKey(accountID));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<AccountData>;
-    const fallback = emptyAccountData();
-    return {
-      profile: { ...fallback.profile, ...(parsed.profile ?? {}) },
-      sessions: parsed.sessions ?? [],
-      mechanicHistory: parsed.mechanicHistory ?? [],
-      achievements: parsed.achievements ?? [],
-      feedback: parsed.feedback ?? [],
-      plan: parsed.plan ?? null,
-      settings: { ...fallback.settings, ...(parsed.settings ?? {}) },
-      schemaVersion: parsed.schemaVersion ?? 1,
-    };
-  } catch (error) {
-    console.warn("Paddle Up: failed to decode saved data, starting fresh.");
+    try {
+      return migrateAccountData(JSON.parse(raw) as Partial<AccountData>);
+    } catch {
+      // Keep the unreadable copy aside instead of overwriting it.
+      localStorage.setItem(`${storageKey(accountID)}.unreadable`, raw);
+      console.warn("Paddle Up: saved data unreadable; backed up, starting fresh.");
+      return null;
+    }
+  } catch {
     return null;
   }
 }

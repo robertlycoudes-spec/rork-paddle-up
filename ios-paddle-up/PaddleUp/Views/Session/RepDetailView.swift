@@ -31,6 +31,7 @@ struct RepDetailView: View {
                 scoreCard
                 if let issue { issueCard(issue) }
                 mechanicsCard
+                BallPaddleDataCard(rep: rep)
                 if let drill { drillCard(drill) }
                 correctionControls
             }

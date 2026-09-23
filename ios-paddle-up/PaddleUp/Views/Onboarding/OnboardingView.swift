@@ -17,13 +17,13 @@ struct OnboardingView: View {
     private enum Step {
         case hook, name, level, playerType, frequency, goals, struggles
         case radarGaps, radarPath
-        case time, advantage, motivation, competitiveness, successMetric
+        case time, advantage, successMetric
         case analyzing, plan, paywall
     }
 
     private static let questionSteps: [Step] = [
         .name, .level, .playerType, .frequency, .goals, .struggles,
-        .radarGaps, .radarPath, .time, .advantage, .motivation, .competitiveness, .successMetric
+        .radarGaps, .radarPath, .time, .advantage, .successMetric
     ]
 
     /// Skill map with visible gaps — the honest baseline the destination map
@@ -54,7 +54,7 @@ struct OnboardingView: View {
     // Mirrors for the single-select questions. They stay `nil` on a fresh run
     // so no option looks pre-picked and NEXT only appears after a real tap;
     // they restore from the profile for returning players.
-    @State private var selectedLevel: SkillLevel?
+    @State private var selectedRange: DuprRange?
     @State private var selectedFrequency: PlayFrequency?
     @State private var selectedTime: WeeklyTrainingTime?
     @State private var answeredSteps: Set<Step> = []
@@ -112,20 +112,22 @@ struct OnboardingView: View {
 
         case .level:
             QuestionScreen(
-                title: "What's your pickleball level?",
-                subtitle: "This sets your benchmarks and drill difficulty.",
+                title: "What's your level?",
+                subtitle: "Know your DUPR? Pick the range it falls in. If not, pick the description that fits best.",
                 eyebrow: "YOUR BASELINE",
                 canContinue: answeredSteps.contains(.level),
                 onContinue: { advance() }
             ) {
-                ForEach(SkillLevel.allCases) { level in
-                    SelectionRow(title: level.displayName, detail: level.detail,
-                                 isSelected: selectedLevel == level) {
+                ForEach(DuprRange.allCases) { range in
+                    SelectionRow(title: "\(range.rangeLabel)  ·  \(range.displayName)",
+                                 detail: range.detail,
+                                 isSelected: selectedRange == range) {
                         select {
-                            selectedLevel = level
-                            answers.level = level
+                            selectedRange = range
+                            answers.duprRange = range
                         }
                     }
+                    .accessibilityIdentifier("dupr-\(range.rawValue)")
                 }
             }
 
@@ -253,38 +255,6 @@ struct OnboardingView: View {
                 AdvantageCard()
             }
 
-        case .motivation:
-            QuestionScreen(
-                title: "What are you training for?",
-                subtitle: "This shapes how your coach talks to you.",
-                eyebrow: "YOUR WHY",
-                canContinue: answers.motivation != nil,
-                onContinue: { advance() }
-            ) {
-                ForEach(TrainingMotivation.allCases) { option in
-                    SelectionRow(title: option.displayName, detail: nil,
-                                 isSelected: answers.motivation == option) {
-                        select { answers.motivation = option }
-                    }
-                }
-            }
-
-        case .competitiveness:
-            QuestionScreen(
-                title: "How competitive are you?",
-                subtitle: "This sets how much volume and pressure your plan carries.",
-                eyebrow: "YOUR EDGE",
-                canContinue: answers.competitiveness != nil,
-                onContinue: { advance() }
-            ) {
-                ForEach(Competitiveness.allCases) { option in
-                    SelectionRow(title: option.displayName, detail: nil,
-                                 isSelected: answers.competitiveness == option) {
-                        select { answers.competitiveness = option }
-                    }
-                }
-            }
-
         case .successMetric:
             QuestionScreen(
                 title: "What would make you say this app is working?",
@@ -374,9 +344,7 @@ struct OnboardingView: View {
         case .radarGaps: .radarPath
         case .radarPath: .time
         case .time: .advantage
-        case .advantage: .motivation
-        case .motivation: .competitiveness
-        case .competitiveness: .successMetric
+        case .advantage: .successMetric
         case .successMetric: .analyzing
         case .analyzing: nil // the analyzing screen advances itself
         case .plan: .paywall
@@ -406,19 +374,19 @@ struct OnboardingView: View {
         answers.playerTypes = profile.playerTypes
         answers.goals = profile.goals
         answers.struggles = profile.struggles
-        answers.weaknesses = profile.weaknesses
-        answers.motivation = profile.motivation
-        answers.competitiveness = profile.competitiveness
         answers.successMetric = profile.successMetric
 
+        if profile.hasCompletedOnboarding || profile.duprRange != nil {
+            selectedRange = profile.duprRange
+            answers.duprRange = profile.duprRange
+            if profile.duprRange != nil { answeredSteps.insert(.level) }
+        }
         if profile.hasCompletedOnboarding {
-            selectedLevel = profile.skillLevel
             selectedFrequency = profile.frequency
             selectedTime = profile.trainingTime
-            answers.level = profile.skillLevel
             answers.frequency = profile.frequency
             answers.trainingTime = profile.trainingTime
-            answeredSteps = [.name, .level, .frequency, .time]
+            answeredSteps.formUnion([.name, .frequency, .time])
         }
     }
 }

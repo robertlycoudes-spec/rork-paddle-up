@@ -35,14 +35,12 @@ import {
 } from "@/lib/pu/game-plan";
 import {
   biggestStruggles,
-  competitivenessOptions,
+  duprRanges,
   playFrequencies,
   playerStyles,
   practiceDaysPerWeek,
-  skillLevels,
   successMetrics,
   trainingGoals,
-  trainingMotivations,
   weeklyTrainingTimes,
 } from "@/lib/pu/profile";
 import { cn } from "@/lib/utils";
@@ -60,8 +58,6 @@ type Step =
   | "radarPath"
   | "time"
   | "advantage"
-  | "motivation"
-  | "competitiveness"
   | "successMetric"
   | "analyzing"
   | "plan"
@@ -80,8 +76,6 @@ const questionSteps: Step[] = [
   "radarPath",
   "time",
   "advantage",
-  "motivation",
-  "competitiveness",
   "successMetric",
 ];
 
@@ -96,9 +90,7 @@ const nextStep: Record<Step, Step | null> = {
   radarGaps: "radarPath",
   radarPath: "time",
   time: "advantage",
-  advantage: "motivation",
-  motivation: "competitiveness",
-  competitiveness: "successMetric",
+  advantage: "successMetric",
   successMetric: "analyzing",
   analyzing: null, // the analyzing screen advances itself
   plan: "paywall",
@@ -184,21 +176,23 @@ export default function Onboarding() {
       playerTypes: profile.playerTypes,
       goals: profile.goals,
       struggles: profile.struggles,
-      weaknesses: profile.weaknesses,
-      motivation: profile.motivation,
-      competitiveness: profile.competitiveness,
       successMetric: profile.successMetric,
+      duprRange: profile.duprRange,
       ...(profile.hasCompletedOnboarding
         ? {
-            level: profile.skillLevel,
             frequency: profile.frequency,
             trainingTime: profile.trainingTime,
           }
         : {}),
     }));
+    const answered = new Set<Step>();
+    if (profile.duprRange) answered.add("level");
     if (profile.hasCompletedOnboarding) {
-      setAnsweredSteps(new Set<Step>(["name", "level", "frequency", "time"]));
+      answered.add("name");
+      answered.add("frequency");
+      answered.add("time");
     }
+    setAnsweredSteps(answered);
   }, [profile]);
 
   const questionIndex = questionSteps.indexOf(step);
@@ -264,19 +258,19 @@ export default function Onboarding() {
 
         {step === "level" && (
           <QuestionScreen
-            title="What's your pickleball level?"
-            subtitle="This sets your benchmarks and drill difficulty."
+            title="What's your level?"
+            subtitle="Know your DUPR? Pick the range it falls in. If not, pick the description that fits best."
             eyebrow="YOUR BASELINE"
-            canContinue={answeredSteps.has("level")}
+            canContinue={answeredSteps.has("level") && answers.duprRange !== undefined}
             onContinue={advance}
           >
-            {skillLevels.map((level) => (
+            {duprRanges.map((range) => (
               <SelectionRow
-                key={level.id}
-                title={level.displayName}
-                detail={level.detail}
-                isSelected={answeredSteps.has("level") && answers.level === level.id}
-                onSelect={() => commit({ ...answers, level: level.id }, "level")}
+                key={range.id}
+                title={`${range.rangeLabel}  ·  ${range.displayName}`}
+                detail={range.detail}
+                isSelected={answeredSteps.has("level") && answers.duprRange === range.id}
+                onSelect={() => commit({ ...answers, duprRange: range.id }, "level")}
               />
             ))}
           </QuestionScreen>
@@ -437,44 +431,6 @@ export default function Onboarding() {
             onContinue={advance}
           >
             <AdvantageCard />
-          </QuestionScreen>
-        )}
-
-        {step === "motivation" && (
-          <QuestionScreen
-            title="What are you training for?"
-            subtitle="This shapes how your coach talks to you."
-            eyebrow="YOUR WHY"
-            canContinue={answers.motivation !== undefined}
-            onContinue={advance}
-          >
-            {trainingMotivations.map((option) => (
-              <SelectionRow
-                key={option.id}
-                title={option.displayName}
-                isSelected={answers.motivation === option.id}
-                onSelect={() => commit({ ...answers, motivation: option.id })}
-              />
-            ))}
-          </QuestionScreen>
-        )}
-
-        {step === "competitiveness" && (
-          <QuestionScreen
-            title="How competitive are you?"
-            subtitle="This sets how much volume and pressure your plan carries."
-            eyebrow="YOUR EDGE"
-            canContinue={answers.competitiveness !== undefined}
-            onContinue={advance}
-          >
-            {competitivenessOptions.map((option) => (
-              <SelectionRow
-                key={option.id}
-                title={option.displayName}
-                isSelected={answers.competitiveness === option.id}
-                onSelect={() => commit({ ...answers, competitiveness: option.id })}
-              />
-            ))}
           </QuestionScreen>
         )}
 

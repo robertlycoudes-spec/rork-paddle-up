@@ -20,6 +20,7 @@ import {
   StatStrip,
   scoreColor,
 } from "@/components/pu/Primitives";
+import { BallPaddleData } from "@/components/pu/BallPaddleData";
 import { CalloutTile } from "@/pages/Profile";
 import { sessionFocus } from "@/lib/pu/coaching";
 import { drillById, drillForMechanic, drillPrescription } from "@/lib/pu/drills";
@@ -276,6 +277,8 @@ export default function SessionSummary() {
             )}
           </div>
         )}
+
+        {reps.length > 0 && <BallPaddleData rep={reps[reps.length - 1] ?? null} />}
       </Screen>
 
       {recommendedDrill && (
