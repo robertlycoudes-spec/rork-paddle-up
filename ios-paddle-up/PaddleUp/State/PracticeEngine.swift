@@ -62,6 +62,9 @@ final class PracticeEngine: NSObject {
     private var timer: Timer?
     private var startMediaTime: CFTimeInterval = 0
     private var pendingClipTasks: Int = 0
+    /// Host-clock time of pose time zero, so rep times map onto clip frames.
+    private var poseClockOrigin: TimeInterval?
+    private var lastPoseTime: TimeInterval = -.infinity
 
     var targetSeconds: TimeInterval? { length.seconds }
     var progress: Double {
@@ -100,9 +103,15 @@ final class PracticeEngine: NSObject {
         // invoked on the camera's capture queue, never the main actor.
         let poseEngine = pose
         let recorder = clipRecorder
+        let cameraService = camera
         camera.sampleHandler = { buffer in
-            poseEngine.process(sampleBuffer: buffer, orientation: .right)
-            recorder?.ingest(sampleBuffer: buffer, now: CACurrentMediaTime())
+            let orientation = cameraService.bufferOrientation
+            poseEngine.process(sampleBuffer: buffer, orientation: orientation)
+            // Buffer the clip on the capture clock too, so a rep's pose time
+            // lines up exactly with its video frames.
+            let pts = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
+            recorder?.ingest(sampleBuffer: buffer, orientation: orientation,
+                             now: pts.isFinite ? pts : CACurrentMediaTime())
         }
         await camera.start()
         startMediaTime = CACurrentMediaTime()
@@ -176,9 +185,9 @@ final class PracticeEngine: NSObject {
         appState?.save(session: session)
 
         // Encode the short clip asynchronously, then attach it to the rep.
-        if let recorder = clipRecorder {
+        if let recorder = clipRecorder, let origin = poseClockOrigin {
             let endTime = window.frames.last?.time ?? elapsed
-            let mediaEnd = startMediaTime + endTime
+            let mediaEnd = origin + endTime
             pendingClipTasks += 1
             Task { [weak self] in
                 let filename = await recorder.saveClip(around: mediaEnd)
@@ -197,10 +206,15 @@ final class PracticeEngine: NSObject {
 }
 
 extension PracticeEngine: PoseEngineDelegate {
-    nonisolated func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?) {
+    nonisolated func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?, hostTime: TimeInterval) {
         Task { @MainActor [weak self] in
             guard let self, !self.isFinished else { return }
             guard let frame else { return }
+            // Main-actor hops aren't guaranteed FIFO; a reordered frame would
+            // produce a bogus wrist speed, so drop anything out of sequence.
+            guard frame.time > self.lastPoseTime else { return }
+            self.lastPoseTime = frame.time
+            if self.poseClockOrigin == nil { self.poseClockOrigin = hostTime - frame.time }
             self.currentPose = frame
 
             let event = self.detector.ingest(frame)

@@ -32,6 +32,9 @@ final class CameraService: NSObject {
 
     /// Set by the practice engine to receive frames.
     nonisolated(unsafe) var sampleHandler: (@Sendable (CMSampleBuffer) -> Void)?
+    /// Orientation that makes delivered buffers upright. Written once during
+    /// configuration, before any frame is delivered.
+    nonisolated(unsafe) private(set) var bufferOrientation: CGImagePropertyOrientation = .up
 
     override init() {
         super.init()
@@ -110,11 +113,20 @@ final class CameraService: NSObject {
                 self.videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "app.paddleup.frames"))
                 if self.session.canAddOutput(self.videoOutput) { self.session.addOutput(self.videoOutput) }
 
-                if let connection = self.videoOutput.connection(with: .video) {
-                    if #available(iOS 17.0, *), connection.isVideoRotationAngleSupported(90) {
+                // Built-in sensors deliver landscape buffers; rotate them to the
+                // portrait the player sees. External cameras already deliver an
+                // upright image and must not be rotated.
+                let isBuiltIn = device.deviceType == .builtInWideAngleCamera
+                var orientation: CGImagePropertyOrientation = .up
+                if isBuiltIn {
+                    orientation = .right
+                    if let connection = self.videoOutput.connection(with: .video),
+                       connection.isVideoRotationAngleSupported(90) {
                         connection.videoRotationAngle = 90
+                        orientation = .up
                     }
                 }
+                self.bufferOrientation = orientation
 
                 self.session.commitConfiguration()
                 continuation.resume(returning: true)

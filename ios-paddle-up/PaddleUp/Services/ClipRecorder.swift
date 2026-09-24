@@ -50,15 +50,17 @@ nonisolated final class ClipRecorder: @unchecked Sendable {
     }
 
     /// Feed a camera frame into the rolling buffer. Old frames fall off the back.
-    func ingest(sampleBuffer: CMSampleBuffer, now: CFTimeInterval) {
+    func ingest(sampleBuffer: CMSampleBuffer, orientation: CGImagePropertyOrientation, now: CFTimeInterval) {
         guard isEnabled else { return }
         guard now - lastCaptureTime >= 1.0 / Double(captureFPS) else { return }
         lastCaptureTime = now
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        // The preview is rotated to portrait; match it so clips are upright.
-        ciImage = ciImage.oriented(.right)
+        // Same orientation the pose engine uses, so clips are upright.
+        if orientation != .up { ciImage = ciImage.oriented(orientation) }
+        ciImage = ciImage.transformed(by: CGAffineTransform(translationX: -ciImage.extent.minX,
+                                                            y: -ciImage.extent.minY))
         let scale = clipWidth / max(1, ciImage.extent.width)
         if scale < 1 {
             ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))

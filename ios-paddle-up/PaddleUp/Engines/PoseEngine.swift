@@ -5,14 +5,21 @@
 //  On-device pose estimation with Vision. Runs entirely on the phone: lower
 //  latency, no cloud cost, and body-position data never leaves the device.
 //
+//  Live frames go through the same `PoseStreamProcessor` (player tracking +
+//  jitter smoothing) as uploaded videos, so both inputs feed the rep detector
+//  identical, comparable pose streams.
+//
 
 import AVFoundation
 import CoreGraphics
 import Foundation
+import QuartzCore
 import Vision
 
 nonisolated protocol PoseEngineDelegate: AnyObject, Sendable {
-    func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?)
+    /// `hostTime` is the capture timestamp on the host clock (the same clock
+    /// as `CACurrentMediaTime`), used to line clips up with reps.
+    func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?, hostTime: TimeInterval)
 }
 
 /// Wraps `VNDetectHumanBodyPoseRequest` and converts Vision's bottom-left
@@ -20,11 +27,18 @@ nonisolated protocol PoseEngineDelegate: AnyObject, Sendable {
 nonisolated final class PoseEngine: @unchecked Sendable {
     private let request = VNDetectHumanBodyPoseRequest()
     private let processingQueue = DispatchQueue(label: "app.paddleup.pose", qos: .userInitiated)
-    private var startTime: CFTimeInterval?
+    private let stream = PoseStreamProcessor()
+    private let busyLock = NSLock()
+
+    // Touched only on `processingQueue`.
+    private var startTime: TimeInterval?
+    // Touched only on the capture queue.
+    private var frameCounter = 0
+    // Guarded by `busyLock`.
+    private var isProcessing = false
+
     /// Process every Nth frame to keep thermals and battery in check.
     private let frameStride: Int
-    private var frameCounter = 0
-    private var isProcessing = false
 
     weak var delegate: PoseEngineDelegate?
 
@@ -34,62 +48,77 @@ nonisolated final class PoseEngine: @unchecked Sendable {
     }
 
     func reset() {
-        startTime = nil
-        frameCounter = 0
+        processingQueue.async { [weak self] in
+            self?.startTime = nil
+            self?.stream.reset()
+        }
     }
 
     /// Feed a camera sample buffer. Non-blocking; results arrive on the delegate.
     func process(sampleBuffer: CMSampleBuffer, orientation: CGImagePropertyOrientation) {
         frameCounter += 1
         guard frameCounter % frameStride == 0 else { return }
-        guard !isProcessing else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        busyLock.lock()
+        if isProcessing { busyLock.unlock(); return }
         isProcessing = true
-        let timestamp = CACurrentMediaTime()
-        if startTime == nil { startTime = timestamp }
-        let elapsed = timestamp - (startTime ?? timestamp)
+        busyLock.unlock()
+
+        // Use the capture timestamp, not the processing time, so wrist speeds
+        // are measured against when the frame was actually taken.
+        let presentation = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        let hostTime = presentation.isFinite ? presentation : CACurrentMediaTime()
 
         processingQueue.async { [weak self] in
             guard let self else { return }
-            defer { self.isProcessing = false }
-            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
-            do {
-                try handler.perform([self.request])
-            } catch {
-                self.delegate?.poseEngine(self, didDetect: nil)
-                return
+            defer {
+                self.busyLock.lock()
+                self.isProcessing = false
+                self.busyLock.unlock()
             }
-            guard let observation = self.request.results?.first else {
-                self.delegate?.poseEngine(self, didDetect: nil)
-                return
-            }
-            let frame = Self.convert(observation: observation, time: elapsed)
-            self.delegate?.poseEngine(self, didDetect: frame)
+            if self.startTime == nil { self.startTime = hostTime }
+            let elapsed = hostTime - (self.startTime ?? hostTime)
+            let candidates = Self.detectCandidates(in: pixelBuffer, orientation: orientation,
+                                                   time: elapsed, using: self.request)
+            let frame = self.stream.process(candidates: candidates, at: elapsed)
+            self.delegate?.poseEngine(self, didDetect: frame, hostTime: hostTime)
         }
     }
 
-    /// Analyse a still image (used by the assessment importer and tests).
+    /// Analyse a still image. Returns the most prominent person.
     static func analyze(cgImage: CGImage, time: TimeInterval) -> PoseFrame? {
         let request = VNDetectHumanBodyPoseRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try? handler.perform([request])
-        guard let observation = request.results?.first else { return nil }
-        return convert(observation: observation, time: time)
+        let aspect = Double(cgImage.width) / Double(max(1, cgImage.height))
+        let frames = (request.results ?? []).map { convert(observation: $0, time: time, aspectRatio: aspect) }
+        return frames.max { PlayerTracker.prominence($0) < PlayerTracker.prominence($1) }
     }
 
-    /// Synchronous pose detection on one decoded video frame (uploaded-video
-    /// analysis). Reuse `request` across frames to avoid re-allocating Vision state.
-    static func detectPose(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation,
-                           time: TimeInterval, using request: VNDetectHumanBodyPoseRequest) -> PoseFrame? {
+    /// Every person Vision finds in one frame. Callers pick the player to follow
+    /// with a `PoseStreamProcessor`. Reuse `request` across frames.
+    static func detectCandidates(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation,
+                                 time: TimeInterval, using request: VNDetectHumanBodyPoseRequest) -> [PoseFrame] {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         do {
             try handler.perform([request])
         } catch {
-            return nil
+            return []
         }
-        guard let observation = request.results?.first else { return nil }
-        return convert(observation: observation, time: time)
+        let aspect = uprightAspectRatio(width: CVPixelBufferGetWidth(pixelBuffer),
+                                        height: CVPixelBufferGetHeight(pixelBuffer),
+                                        orientation: orientation)
+        return (request.results ?? []).map { convert(observation: $0, time: time, aspectRatio: aspect) }
+    }
+
+    /// Width ÷ height of the image as Vision sees it after applying `orientation`.
+    static func uprightAspectRatio(width: Int, height: Int, orientation: CGImagePropertyOrientation) -> Double {
+        let w = Double(max(1, width)), h = Double(max(1, height))
+        switch orientation {
+        case .left, .right, .leftMirrored, .rightMirrored: return h / w
+        default: return w / h
+        }
     }
 
     private static let jointMap: [VNHumanBodyPoseObservation.JointName: PoseJoint] = [
@@ -102,7 +131,8 @@ nonisolated final class PoseEngine: @unchecked Sendable {
         .leftAnkle: .leftAnkle, .rightAnkle: .rightAnkle
     ]
 
-    private static func convert(observation: VNHumanBodyPoseObservation, time: TimeInterval) -> PoseFrame {
+    private static func convert(observation: VNHumanBodyPoseObservation, time: TimeInterval,
+                                aspectRatio: Double) -> PoseFrame {
         var joints: [PoseJoint: PosePoint] = [:]
         for (visionJoint, joint) in jointMap {
             guard let point = try? observation.recognizedPoint(visionJoint), point.confidence > 0.05 else { continue }
@@ -111,6 +141,6 @@ nonisolated final class PoseEngine: @unchecked Sendable {
                                       y: 1 - point.location.y,
                                       confidence: Double(point.confidence))
         }
-        return PoseFrame(time: time, joints: joints)
+        return PoseFrame(time: time, joints: joints, aspectRatio: aspectRatio)
     }
 }

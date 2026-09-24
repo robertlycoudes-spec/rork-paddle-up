@@ -43,7 +43,8 @@ final class CameraSetupModel: NSObject {
     func start() async {
         pose.delegate = self
         camera.sampleHandler = { [weak self] buffer in
-            self?.pose.process(sampleBuffer: buffer, orientation: .right)
+            guard let self else { return }
+            self.pose.process(sampleBuffer: buffer, orientation: self.camera.bufferOrientation)
         }
         await camera.start()
     }
@@ -93,7 +94,7 @@ final class CameraSetupModel: NSObject {
 }
 
 extension CameraSetupModel: PoseEngineDelegate {
-    nonisolated func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?) {
+    nonisolated func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?, hostTime: TimeInterval) {
         Task { @MainActor [weak self] in self?.evaluate(frame: frame) }
     }
 }

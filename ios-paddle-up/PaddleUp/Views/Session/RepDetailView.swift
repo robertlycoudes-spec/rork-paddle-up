@@ -75,7 +75,7 @@ struct RepDetailView: View {
                     .allowsHitTesting(true)
             } else if !rep.poseFrames.isEmpty {
                 // No clip saved — replay the stored pose sequence instead.
-                PoseSkeletonOverlay(frame: rep.poseFrames[safe: overlayFrameIndex])
+                PoseSkeletonOverlay(frame: rep.poseFrames[safe: overlayFrameIndex], contentMode: .fit)
                     .background(PUColor.canvasDeep)
                     .clipShape(.rect(cornerRadius: PUMetrics.cardRadius))
             } else {

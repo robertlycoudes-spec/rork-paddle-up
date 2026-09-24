@@ -8,11 +8,17 @@
 import SwiftUI
 
 struct PoseSkeletonOverlay: View {
+    /// How the underlying image is laid out in this view.
+    nonisolated enum ContentMode: Sendable { case fill, fit }
+
     let frame: PoseFrame?
     var color: Color = PUColor.lime
     var lineWidth: CGFloat = 3
     var jointRadius: CGFloat = 5
     var showsJoints: Bool = true
+    /// Matches the camera preview's aspect-fill by default so joints land on
+    /// the player instead of drifting toward the cropped edges.
+    var contentMode: ContentMode = .fill
 
     private static let bones: [(PoseJoint, PoseJoint)] = [
         (.leftShoulder, .rightShoulder),
@@ -28,29 +34,42 @@ struct PoseSkeletonOverlay: View {
     var body: some View {
         Canvas { context, size in
             guard let frame else { return }
+            let rect = Self.imageRect(in: size, aspectRatio: frame.aspectRatio, mode: contentMode)
+            func map(_ p: CGPoint) -> CGPoint {
+                CGPoint(x: rect.minX + p.x * rect.width, y: rect.minY + p.y * rect.height)
+            }
 
             for (start, end) in Self.bones {
-                guard let a = frame.point(start, minConfidence: 0.25),
-                      let b = frame.point(end, minConfidence: 0.25) else { continue }
+                guard let a = frame.displayPoint(start, minConfidence: 0.25),
+                      let b = frame.displayPoint(end, minConfidence: 0.25) else { continue }
                 var path = Path()
-                path.move(to: CGPoint(x: a.x * size.width, y: a.y * size.height))
-                path.addLine(to: CGPoint(x: b.x * size.width, y: b.y * size.height))
+                path.move(to: map(a))
+                path.addLine(to: map(b))
                 context.stroke(path, with: .color(color),
                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             }
 
             guard showsJoints else { return }
             for (_, point) in frame.joints where point.confidence > 0.25 {
-                let rect = CGRect(
-                    x: point.x * size.width - jointRadius,
-                    y: point.y * size.height - jointRadius,
-                    width: jointRadius * 2,
-                    height: jointRadius * 2
-                )
-                context.fill(Circle().path(in: rect), with: .color(color))
+                let center = map(point.cg)
+                let dot = CGRect(x: center.x - jointRadius, y: center.y - jointRadius,
+                                 width: jointRadius * 2, height: jointRadius * 2)
+                context.fill(Circle().path(in: dot), with: .color(color))
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// Where an image of `aspectRatio` (w ÷ h) is drawn inside `size`.
+    nonisolated static func imageRect(in size: CGSize, aspectRatio: Double, mode: ContentMode) -> CGRect {
+        guard size.width > 0, size.height > 0, aspectRatio > 0 else { return CGRect(origin: .zero, size: size) }
+        let viewAspect = size.width / size.height
+        let widthLimited = (aspectRatio > viewAspect) == (mode == .fit)
+        let drawn = widthLimited
+            ? CGSize(width: size.width, height: size.width / aspectRatio)
+            : CGSize(width: size.height * aspectRatio, height: size.height)
+        return CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2,
+                      width: drawn.width, height: drawn.height)
     }
 }
 
