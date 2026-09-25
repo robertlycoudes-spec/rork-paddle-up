@@ -106,6 +106,7 @@ final class AssessmentFlowUITests: XCTestCase {
         next(app) // advantage
         tap(button(app, prefix: "Fewer unforced errors"))
         next(app)
+        tap(button(app, prefix: "BUILD MY PLAN")) // player reviews
 
         // Analyzing advances itself, then the plan screen.
         let seePlan = button(app, prefix: "SEE MY FULL PLAN")

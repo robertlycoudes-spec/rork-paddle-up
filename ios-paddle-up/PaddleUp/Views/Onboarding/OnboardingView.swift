@@ -17,13 +17,13 @@ struct OnboardingView: View {
     private enum Step {
         case hook, name, level, playerType, frequency, goals, struggles
         case radarGaps, radarPath
-        case time, advantage, successMetric
+        case time, advantage, successMetric, reviews
         case analyzing, plan, paywall
     }
 
     private static let questionSteps: [Step] = [
         .name, .level, .playerType, .frequency, .goals, .struggles,
-        .radarGaps, .radarPath, .time, .advantage, .successMetric
+        .radarGaps, .radarPath, .time, .advantage, .successMetric, .reviews
     ]
 
     /// Skill map with visible gaps — the honest baseline the destination map
@@ -276,6 +276,12 @@ struct OnboardingView: View {
                 }
             }
 
+        case .reviews:
+            OnboardingReviewsScreen {
+                Haptics.success()
+                advance()
+            }
+
         case .analyzing:
             AnalyzingScreen(firstName: answers.name) {
                 withAnimation(spring) { step = .plan }
@@ -350,7 +356,8 @@ struct OnboardingView: View {
         case .radarPath: .time
         case .time: .advantage
         case .advantage: .successMetric
-        case .successMetric: .analyzing
+        case .successMetric: .reviews
+        case .reviews: .analyzing
         case .analyzing: nil // the analyzing screen advances itself
         case .plan: .paywall
         case .paywall: nil // completion routes out of onboarding
