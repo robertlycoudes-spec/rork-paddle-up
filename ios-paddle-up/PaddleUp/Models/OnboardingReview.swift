@@ -34,27 +34,27 @@ nonisolated enum OnboardingSocialProof {
 
     static let reviews: [OnboardingReview] = [
         OnboardingReview(
-            id: "review-1", name: "Player One", imageName: "review-1",
+            id: "review-1", name: "Leonardo Moose", imageName: "review-1",
             quote: "Six weeks of daily reps and my dinks finally stay low. My partners keep asking who's coaching me."
         ),
         OnboardingReview(
-            id: "review-2", name: "Player Two", imageName: "review-2",
+            id: "review-2", name: "Sawyer Boulton", imageName: "review-2",
             quote: "One fix per session is genius. I stopped overthinking and my third-shot drop actually lands in the kitchen now."
         ),
         OnboardingReview(
-            id: "review-3", name: "Player Three", imageName: "review-3",
+            id: "review-3", name: "Andre Dean", imageName: "review-3",
             quote: "I set my phone on the fence, hit 50 reps, and get a score on every single one. Nothing else does that."
         ),
         OnboardingReview(
-            id: "review-4", name: "Player Four", imageName: "review-4",
+            id: "review-4", name: "Tucker Tralson", imageName: "review-4",
             quote: "Went from 3.2 to 3.6 this season. The weekly plan keeps me honest about the shots I used to avoid."
         ),
         OnboardingReview(
-            id: "review-5", name: "Player Five", imageName: "review-5",
+            id: "review-5", name: "George Murduck", imageName: "review-5",
             quote: "The voice coach between reps feels like having a pro standing next to me. Worth every minute."
         ),
         OnboardingReview(
-            id: "review-6", name: "Player Six", imageName: "review-6",
+            id: "review-6", name: "Caleb Plummer", imageName: "review-6",
             quote: "I only have 20 minutes after work. The daily drill tells me exactly what to hit, so none of it is wasted."
         )
     ]
