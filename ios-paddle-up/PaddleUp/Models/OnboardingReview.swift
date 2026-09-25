@@ -52,6 +52,10 @@ nonisolated enum OnboardingSocialProof {
         OnboardingReview(
             id: "review-5", name: "Player Five", imageName: "review-5",
             quote: "The voice coach between reps feels like having a pro standing next to me. Worth every minute."
+        ),
+        OnboardingReview(
+            id: "review-6", name: "Player Six", imageName: "review-6",
+            quote: "I only have 20 minutes after work. The daily drill tells me exactly what to hit, so none of it is wasted."
         )
     ]
 }
