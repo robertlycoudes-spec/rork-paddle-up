@@ -34,7 +34,7 @@ nonisolated enum OnboardingSocialProof {
 
     static let reviews: [OnboardingReview] = [
         OnboardingReview(
-            id: "review-1", name: "Leonardo Moose", imageName: "review-1",
+            id: "review-1", name: "Connor Wilson", imageName: "review-1",
             quote: "Six weeks of daily reps and my dinks finally stay low. My partners keep asking who's coaching me."
         ),
         OnboardingReview(
