@@ -13,6 +13,7 @@ nonisolated struct OnboardingReview: Identifiable, Sendable, Hashable {
     let id: String
     let name: String
     let imageName: String
+    let title: String
     let quote: String
     var rating: Int = 5
 
@@ -27,34 +28,40 @@ nonisolated struct OnboardingReview: Identifiable, Sendable, Hashable {
 nonisolated enum OnboardingSocialProof {
     static let headline = "Join thousands of players training with Paddle Up"
 
-    static let ratingValue = "1K+"
-    static let ratingLabel = "App ratings"
-    static let lovedValue = "4.9"
-    static let lovedLabel = "Loved by players"
+    static let eyebrow = "TRUSTED ON COURT"
+    static let averageRating = "4.9"
+    static let ratingCount = "1K+"
+    static let ratingCaption = "Average from 1K+ player ratings"
 
     static let reviews: [OnboardingReview] = [
         OnboardingReview(
             id: "review-1", name: "Conner Wilson", imageName: "review-1",
+            title: "My dinks finally stay low",
             quote: "Six weeks of daily reps and my dinks finally stay low. My partners keep asking who's coaching me."
         ),
         OnboardingReview(
             id: "review-2", name: "Chris Aureliano", imageName: "review-2",
+            title: "One fix at a time works",
             quote: "One fix per session is genius. I stopped overthinking and my third-shot drop actually lands in the kitchen now."
         ),
         OnboardingReview(
             id: "review-3", name: "Andre Dean", imageName: "review-3",
+            title: "A score on every rep",
             quote: "I set my phone on the fence, hit 50 reps, and get a score on every single one. Nothing else does that."
         ),
         OnboardingReview(
             id: "review-4", name: "Tucker Tralson", imageName: "review-4",
+            title: "3.2 to 3.6 in one season",
             quote: "Went from 3.2 to 3.6 this season. The weekly plan keeps me honest about the shots I used to avoid."
         ),
         OnboardingReview(
             id: "review-5", name: "George Murduck", imageName: "review-5",
+            title: "Like a pro on my shoulder",
             quote: "The voice coach between reps feels like having a pro standing next to me. Worth every minute."
         ),
         OnboardingReview(
             id: "review-6", name: "Caleb Plummer", imageName: "review-6",
+            title: "Perfect for busy weeks",
             quote: "I only have 20 minutes after work. The daily drill tells me exactly what to hit, so none of it is wasted."
         )
     ]

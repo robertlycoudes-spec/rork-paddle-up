@@ -106,7 +106,13 @@ final class AssessmentFlowUITests: XCTestCase {
         next(app) // advantage
         tap(button(app, prefix: "Fewer unforced errors"))
         next(app)
-        tap(button(app, prefix: "BUILD MY PLAN")) // player reviews
+        // Player reviews: continue unlocks only after scrolling to the end.
+        let buildPlan = button(app, prefix: "BUILD MY PLAN")
+        for _ in 0..<12 where !(buildPlan.exists && buildPlan.isEnabled) {
+            app.swipeUp()
+        }
+        waitEnabled(buildPlan)
+        buildPlan.tap()
 
         // Analyzing advances itself, then the plan screen.
         let seePlan = button(app, prefix: "SEE MY FULL PLAN")
