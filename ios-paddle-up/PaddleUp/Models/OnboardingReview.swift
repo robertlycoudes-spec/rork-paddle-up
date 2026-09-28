@@ -38,7 +38,7 @@ nonisolated enum OnboardingSocialProof {
             quote: "Six weeks of daily reps and my dinks finally stay low. My partners keep asking who's coaching me."
         ),
         OnboardingReview(
-            id: "review-2", name: "Sawyer Boulton", imageName: "review-2",
+            id: "review-2", name: "Chris Aureliano", imageName: "review-2",
             quote: "One fix per session is genius. I stopped overthinking and my third-shot drop actually lands in the kitchen now."
         ),
         OnboardingReview(
