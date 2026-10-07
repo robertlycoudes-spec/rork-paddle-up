@@ -1,12 +1,11 @@
 /**
  * Single source for company details shown across the site.
- * Swap `supportEmail` once the real domain is live — every page reads it here.
  */
 export const SITE = {
   company: "RDL Development LLC",
   companyShort: "RDL Development",
   product: "Paddle Up",
-  supportEmail: "support@[DOMAIN]",
+  supportEmail: "support@paddleupapp.com",
   responseTime: "We reply to every message within 1–2 business days.",
   legalLastUpdated: "September 23, 2026",
   legalLastUpdatedISO: "2026-09-23",
