@@ -166,6 +166,30 @@ struct RepDetectorStateTests {
         #expect(detector.state == .idle)
     }
 
+    @Test func dinkWithNoVisibleBackswingStillCounts() {
+        let detector = RepDetector(hand: .right)
+        var stream = PoseStream()
+        stream.still(5)
+        stream.move([1.2, 2.5, 4, 3.5, 2.2, 1.2, 0.3])
+        stream.still(2)
+
+        let run = DetectorRun(stream.frames, detector: detector)
+        #expect(run.completed.count == 1)
+    }
+
+    @Test func followThroughThatFlowsIntoRecoveryStillCounts() {
+        let detector = RepDetector(hand: .right)
+        var stream = PoseStream()
+        stream.still(5)
+        stream.move(Array(repeating: -1.5, count: 6))
+        stream.move([2, 3, 4, 5, 3.4, 2])
+        // Never fully still: drifts straight back to ready position.
+        stream.move(Array(repeating: -0.6, count: 20))
+
+        let run = DetectorRun(stream.frames, detector: detector)
+        #expect(run.completed.count == 1)
+    }
+
     @Test func resetReturnsToIdleMidSwing() {
         let detector = RepDetector(hand: .right)
         var stream = PoseStream()

@@ -36,15 +36,29 @@ nonisolated struct RepDetectorTuning: Sendable {
     var minimumPeakSpeed: Double = 1.2
     /// Minimum wrist path length in body scales.
     var minimumPathLength: Double = 0.45
-    var minimumDuration: TimeInterval = 0.22
+    var minimumDuration: TimeInterval = 0.18
     var maximumDuration: TimeInterval = 2.6
     /// Refractory period after a rep before another can start.
     var cooldown: TimeInterval = 0.35
     /// Max hip travel allowed during a rep (filters walking).
     var maximumHipTravel: Double = 1.15
-    var minimumPoseConfidence: Double = 0.32
+    var minimumPoseConfidence: Double = 0.28
     /// Direction reversal (degrees) required between backswing and forward swing.
     var reversalAngle: Double = 95
+    /// How long the wrist must stay below `motionStartSpeed` before the next
+    /// swing can arm. Time-based so it behaves the same at 15 and 30 fps.
+    var settleTime: TimeInterval = 0.06
+    /// After contact, the swing is over once wrist speed falls below this
+    /// fraction of the peak (or `restSpeed`, whichever is higher)…
+    var followThroughSpeedRatio: Double = 0.15
+    /// …or once this long has passed since peak speed. Real players flow from
+    /// follow-through straight into recovery and rarely go fully still.
+    var followThroughTimeout: TimeInterval = 0.45
+    /// Short dinks and punch volleys often have almost no visible backswing,
+    /// so the first motion the detector sees IS the forward swing. A motion
+    /// that peaks at least this fast and then decays counts as a swing even
+    /// without a direction reversal.
+    var forwardOnlyPeakSpeed: Double = 2.0
 }
 
 /// Result of feeding one frame to the detector.
@@ -72,6 +86,8 @@ nonisolated final class RepDetector {
     private var forwardVelocity: CGVector = .zero
     private var cooldownUntil: TimeInterval = 0
     private var stillFrames: Int = 0
+    /// When the wrist last became quiet (below `motionStartSpeed`), for arming.
+    private var quietSince: TimeInterval?
 
     /// Live debug readouts for developer mode.
     private(set) var lastWristSpeed: Double = 0
@@ -90,6 +106,7 @@ nonisolated final class RepDetector {
         speeds.removeAll()
         peakSpeed = 0
         stillFrames = 0
+        quietSince = nil
     }
 
     func updateTuning(_ tuning: RepDetectorTuning) { self.tuning = tuning }
@@ -130,6 +147,16 @@ nonisolated final class RepDetector {
         speeds.append(speed)
         lastWristSpeed = speed
 
+        // Track settling during cooldown too, so a player who is already back
+        // at ready when the refractory period ends can swing again at once.
+        if state == .idle || state == .cooldown {
+            if speed < tuning.motionStartSpeed && confidence >= tuning.minimumPoseConfidence {
+                if quietSince == nil { quietSince = frame.time }
+            } else {
+                quietSince = nil
+            }
+        }
+
         if frame.time < cooldownUntil {
             return state == .cooldown ? .none : transition(to: .cooldown)
         }
@@ -143,8 +170,9 @@ nonisolated final class RepDetector {
 
         switch state {
         case .idle, .cooldown:
-            stillFrames = speed < tuning.restSpeed ? stillFrames + 1 : 0
-            if stillFrames >= 3 { return transition(to: .ready) }
+            if let quiet = quietSince, frame.time - quiet >= tuning.settleTime - 0.0001 {
+                return transition(to: .ready)
+            }
             return .none
 
         case .ready:
@@ -171,6 +199,13 @@ nonisolated final class RepDetector {
                 peakSpeedIndex = buffer.count - 1
                 return transition(to: .forwardSwing)
             }
+            // No reversal, but a fast burst that has peaked and is decaying:
+            // the first motion was the forward swing itself.
+            if peakSpeed >= tuning.forwardOnlyPeakSpeed && speed < peakSpeed * 0.72 {
+                forwardStartIndex = candidateStartIndex
+                forwardVelocity = backswingVelocity
+                return transition(to: .contactWindow)
+            }
             // A long slow drift without a reversal is not a swing.
             if buffer[buffer.count - 1].time - buffer[candidateStartIndex].time > tuning.maximumDuration {
                 return finish(rejecting: .tooLong)
@@ -196,7 +231,11 @@ nonisolated final class RepDetector {
             return .none
 
         case .contactWindow:
-            if speed < tuning.restSpeed { return transition(to: .followThrough) }
+            let sincePeak = frame.time - buffer[min(peakSpeedIndex, buffer.count - 1)].time
+            if speed < max(tuning.restSpeed, peakSpeed * tuning.followThroughSpeedRatio)
+                || sincePeak > tuning.followThroughTimeout {
+                return transition(to: .followThrough)
+            }
             if buffer[buffer.count - 1].time - buffer[candidateStartIndex].time > tuning.maximumDuration {
                 return finish(rejecting: .tooLong)
             }
@@ -214,7 +253,7 @@ nonisolated final class RepDetector {
     private func transition(to newState: RepState) -> RepDetectorEvent {
         guard newState != state else { return .none }
         state = newState
-        if newState == .ready || newState == .idle { stillFrames = 0 }
+        if newState == .ready || newState == .idle { stillFrames = 0; quietSince = nil }
         if newState == .followThrough { stillFrames = 0 }
         return .stateChanged(newState)
     }
@@ -230,7 +269,8 @@ nonisolated final class RepDetector {
         let start = max(0, candidateStartIndex)
         guard endIndex > start else { return finish(rejecting: .tooShort) }
         let frames = Array(buffer[start...endIndex])
-        guard frames.count >= 5 else { return finish(rejecting: .tooShort) }
+        // Live pose runs at ~15 fps, so a quick dink spans only a handful of frames.
+        guard frames.count >= 4 else { return finish(rejecting: .tooShort) }
 
         let duration = frames[frames.count - 1].time - frames[0].time
         if duration < tuning.minimumDuration { return finish(rejecting: .tooShort) }

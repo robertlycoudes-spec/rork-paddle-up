@@ -32,6 +32,12 @@ final class PracticeEngine: NSObject {
     private let pose = PoseEngine()
     private let voice = VoiceCoach()
     private var detector: RepDetector
+    /// Watches the other arm. Vision sometimes swaps left/right labels (and a
+    /// player may film with the profile's handedness wrong); if this arm keeps
+    /// producing clean swings while the paddle arm produces none, we switch.
+    private var offHandDetector: RepDetector
+    private var offHandSwings: Int = 0
+    private var paddleHandSwings: Int = 0
     private var clipRecorder: ClipRecorder?
 
     private weak var appState: AppState?
@@ -41,7 +47,7 @@ final class PracticeEngine: NSObject {
     private(set) var mode: SessionMode
     private(set) var drill: Drill?
     private(set) var length: SessionLength
-    private let hand: Handedness
+    private var hand: Handedness
 
     // Live session state
     private(set) var session: SessionRecord
@@ -81,6 +87,7 @@ final class PracticeEngine: NSObject {
         self.appState = appState
         self.hand = appState.profile.handedness
         self.detector = RepDetector(hand: appState.profile.handedness)
+        self.offHandDetector = RepDetector(hand: appState.profile.handedness.opposite)
         self.currentCue = drill?.focusCue ?? "SETTLE IN"
         self.session = SessionRecord(startedAt: .now, shot: shot, mode: mode,
                                      drillID: drill?.id, focusCue: drill?.focusCue)
@@ -205,6 +212,24 @@ final class PracticeEngine: NSObject {
     }
 }
 
+extension PracticeEngine {
+    /// Two clean off-arm swings with none on the paddle arm, or the off arm
+    /// clearly out-swinging it, means we're watching the wrong wrist.
+    fileprivate func shouldSwitchHands() -> Bool {
+        if paddleHandSwings == 0 { return offHandSwings >= 2 }
+        return offHandSwings >= 4 && Double(offHandSwings) >= Double(paddleHandSwings) * 2
+    }
+
+    fileprivate func switchHands() {
+        let previous = detector
+        detector = offHandDetector
+        offHandDetector = previous
+        hand = hand.opposite
+        swap(&paddleHandSwings, &offHandSwings)
+        appState?.analytics.record(.repRejected, properties: ["reason": "handSwitched"])
+    }
+}
+
 extension PracticeEngine: PoseEngineDelegate {
     nonisolated func poseEngine(_ engine: PoseEngine, didDetect frame: PoseFrame?, hostTime: TimeInterval) {
         Task { @MainActor [weak self] in
@@ -218,11 +243,22 @@ extension PracticeEngine: PoseEngineDelegate {
             self.currentPose = frame
 
             let event = self.detector.ingest(frame)
+            let offHandEvent = self.offHandDetector.ingest(frame)
             self.detectorState = self.detector.state
             self.liveWristSpeed = self.detector.lastWristSpeed
 
+            if case .repCompleted(let window) = offHandEvent {
+                self.offHandSwings += 1
+                if self.shouldSwitchHands() {
+                    self.switchHands()
+                    self.handle(window: window)
+                    return
+                }
+            }
+
             switch event {
             case .repCompleted(let window):
+                self.paddleHandSwings += 1
                 self.handle(window: window)
             case .repRejected(let reason):
                 self.lastRejection = reason
