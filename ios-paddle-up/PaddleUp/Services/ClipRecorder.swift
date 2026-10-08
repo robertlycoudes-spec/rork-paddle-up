@@ -92,7 +92,9 @@ nonisolated final class ClipRecorder: @unchecked Sendable {
 
         let filename = "rep-\(UUID().uuidString).mp4"
         let url = outputDirectory.appendingPathComponent(filename)
-        let size = CGSize(width: first.image.width, height: first.image.height)
+        // H.264 encoders reject odd dimensions; round down to even.
+        let size = CGSize(width: first.image.width & ~1, height: first.image.height & ~1)
+        guard size.width >= 2, size.height >= 2 else { return nil }
 
         guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return nil }
         let settings: [String: Any] = [
@@ -113,20 +115,44 @@ nonisolated final class ClipRecorder: @unchecked Sendable {
         )
         guard writer.canAdd(input) else { return nil }
         writer.add(input)
-        writer.startWriting()
+        guard writer.startWriting() else {
+            logger.error("Clip writer failed to start.")
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
         writer.startSession(atSourceTime: .zero)
 
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(captureFPS))
+        var appended = 0
+        var aborted = false
         for (index, frame) in frames.enumerated() {
-            guard let pool = adaptor.pixelBufferPool,
-                  let pixelBuffer = makePixelBuffer(from: frame.image, pool: pool, size: size) else { continue }
-            let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(index))
+            // Wait for the encoder to drain. Never append while it isn't ready:
+            // AVFoundation throws an uncatchable exception and kills the app.
             var attempts = 0
-            while !input.isReadyForMoreMediaData && attempts < 100 {
+            while !input.isReadyForMoreMediaData && writer.status == .writing && attempts < 250 {
                 try? await Task.sleep(for: .milliseconds(8))
                 attempts += 1
             }
-            adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+            guard writer.status == .writing, input.isReadyForMoreMediaData else {
+                aborted = true
+                break
+            }
+            guard let pool = adaptor.pixelBufferPool,
+                  let pixelBuffer = makePixelBuffer(from: frame.image, pool: pool, size: size) else { continue }
+            let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(index))
+            if adaptor.append(pixelBuffer, withPresentationTime: presentationTime) {
+                appended += 1
+            } else {
+                aborted = true
+                break
+            }
+        }
+
+        if aborted || appended < 4 {
+            logger.error("Clip encode skipped; encoder not ready.")
+            if writer.status == .writing { writer.cancelWriting() }
+            try? FileManager.default.removeItem(at: url)
+            return nil
         }
 
         input.markAsFinished()
