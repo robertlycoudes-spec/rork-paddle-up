@@ -18,7 +18,7 @@ struct OnboardingView: View {
         case hook, name, level, playerType, frequency, goals, struggles
         case radarGaps, radarPath
         case time, advantage, successMetric, reviews
-        case analyzing, plan, paywall
+        case analyzing, plan
     }
 
     private static let questionSteps: [Step] = [
@@ -59,7 +59,9 @@ struct OnboardingView: View {
     @State private var selectedTime: WeeklyTrainingTime?
     @State private var answeredSteps: Set<Step> = []
 
-    private static let flowOrder: [Step] = [.hook] + questionSteps + [.analyzing, .plan, .paywall]
+    // TEMP: paywall step removed while the app is in testing. Re-add
+    // `.paywall` here (and to `Step` + `advance`) to bring it back.
+    private static let flowOrder: [Step] = [.hook] + questionSteps + [.analyzing, .plan]
 
     private var questionIndex: Int? { Self.questionSteps.firstIndex(of: step) }
 
@@ -290,11 +292,6 @@ struct OnboardingView: View {
         case .plan:
             PlanScreen(plan: GamePlanEngine.generate(answers)) {
                 Haptics.success()
-                advance()
-            }
-
-        case .paywall:
-            PaywallScreen(answers: answers) {
                 appState.completeOnboarding(answers)
             }
         }
@@ -359,8 +356,7 @@ struct OnboardingView: View {
         case .successMetric: .reviews
         case .reviews: .analyzing
         case .analyzing: nil // the analyzing screen advances itself
-        case .plan: .paywall
-        case .paywall: nil // completion routes out of onboarding
+        case .plan: nil // TEMP: onboarding completes straight from the plan — paywall removed for testing
         }
         guard let next else { return }
         slidesForward = true

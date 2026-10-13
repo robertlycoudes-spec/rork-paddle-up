@@ -132,7 +132,15 @@ final class StoreService {
     /// DEBUG-only override so the Pro experience stays testable in the
     /// simulator before App Store Connect products exist. Never compiled into
     /// Release builds' gating.
-    private(set) var debugOverride = false
+    /// TEMP: on by default in debug while the paywall is removed for testing.
+    /// Restore to `false` when the paywall comes back.
+    private(set) var debugOverride = {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
 
     private var storeProducts: [String: Product] = [:]
     private var updatesTask: Task<Void, Never>?

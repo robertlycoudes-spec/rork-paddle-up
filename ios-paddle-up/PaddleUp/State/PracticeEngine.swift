@@ -52,6 +52,9 @@ final class PracticeEngine: NSObject {
     // Live session state
     private(set) var session: SessionRecord
     private(set) var latestFeedback: LiveRepFeedback?
+    /// True for a few seconds after each rep while the grade is being worked
+    /// out — the UI shows an analyzing state until the score is revealed.
+    private(set) var isAnalyzingRep = false
     private(set) var repCount: Int = 0
     private(set) var elapsed: TimeInterval = 0
     private(set) var isFinished = false
@@ -68,6 +71,9 @@ final class PracticeEngine: NSObject {
     private var timer: Timer?
     private var startMediaTime: CFTimeInterval = 0
     private var pendingClipTasks: Int = 0
+    /// Deliberate pause between detecting a rep and showing its grade.
+    private let analysisRevealDelay: Duration = .seconds(2.6)
+    private var feedbackRevealTask: Task<Void, Never>?
     /// Host-clock time of pose time zero, so rep times map onto clip frames.
     private var poseClockOrigin: TimeInterval?
     private var lastPoseTime: TimeInterval = -.infinity
@@ -130,6 +136,7 @@ final class PracticeEngine: NSObject {
     func end() {
         guard !isFinished else { return }
         isFinished = true
+        feedbackRevealTask?.cancel()
         timer?.invalidate()
         timer = nil
         camera.sampleHandler = nil
@@ -143,6 +150,7 @@ final class PracticeEngine: NSObject {
     }
 
     func teardown() {
+        feedbackRevealTask?.cancel()
         timer?.invalidate()
         camera.sampleHandler = nil
         camera.stop()
@@ -179,10 +187,7 @@ final class PracticeEngine: NSObject {
 
         currentCue = coaching.cue
         let feedback = LiveRepFeedback(rep: rep, coaching: coaching)
-        latestFeedback = feedback
 
-        Haptics.repDetected(score: analysisScore)
-        voice.handle(coaching: coaching, repIndex: repCount)
         appState?.analytics.record(.repDetected, properties: [
             "shot": rep.shot.rawValue, "score": String(Int(analysisScore))
         ])
@@ -190,6 +195,21 @@ final class PracticeEngine: NSObject {
         // Persist the rep immediately so a crash never loses practice data.
         session.reps.append(rep)
         appState?.save(session: session)
+
+        // The grade is computed the moment the rep ends, but the reveal is
+        // deliberate: a few seconds of visible analysis before the score and
+        // coaching appear. A later rep cancels a pending reveal — its own
+        // feedback replaces this one.
+        isAnalyzingRep = true
+        feedbackRevealTask?.cancel()
+        feedbackRevealTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.analysisRevealDelay ?? .seconds(2.6))
+            guard let self, !Task.isCancelled, !self.isFinished else { return }
+            self.isAnalyzingRep = false
+            self.latestFeedback = feedback
+            Haptics.repDetected(score: analysisScore)
+            self.voice.handle(coaching: coaching, repIndex: self.repCount)
+        }
 
         // Encode the short clip asynchronously, then attach it to the rep.
         if let recorder = clipRecorder, let origin = poseClockOrigin {

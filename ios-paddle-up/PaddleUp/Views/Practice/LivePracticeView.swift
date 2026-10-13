@@ -65,6 +65,7 @@ struct LivePracticeView: View {
     @State private var engine: PracticeEngine?
     @State private var showingEndConfirmation = false
     @State private var showingDeveloperPanel = false
+    @State private var scanAngle: Double = 0
 
     var body: some View {
         ZStack {
@@ -228,7 +229,9 @@ struct LivePracticeView: View {
 
     private func feedbackPane(engine: PracticeEngine) -> some View {
         VStack(spacing: 10) {
-            if let feedback = engine.latestFeedback {
+            if engine.isAnalyzingRep {
+                analyzingCard()
+            } else if let feedback = engine.latestFeedback {
                 scoreCard(feedback: feedback)
                 correctionCard(feedback: feedback)
             } else {
@@ -248,6 +251,36 @@ struct LivePracticeView: View {
         .padding(.bottom, 34)
         .background(PUColor.canvas)
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: engine.latestFeedback?.id)
+    }
+
+    /// Shown for the few seconds a rep is being graded, between detection and
+    /// the score reveal.
+    private func analyzingCard() -> some View {
+        PUCard(padding: 18) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle().stroke(PUColor.lime.opacity(0.2), lineWidth: 3)
+                    Circle()
+                        .trim(from: 0, to: 0.28)
+                        .stroke(PUColor.lime, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(scanAngle))
+                }
+                .frame(width: 30, height: 30)
+                .onAppear {
+                    withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                        scanAngle = 360
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Analyzing rep").puMicroLabel()
+                    Text("Measuring contact, knee bend and balance…")
+                        .font(PUFont.body)
+                        .foregroundStyle(PUColor.textSecondary)
+                }
+                Spacer()
+            }
+        }
     }
 
     private func scoreCard(feedback: LiveRepFeedback) -> some View {

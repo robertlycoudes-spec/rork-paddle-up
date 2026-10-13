@@ -36,6 +36,15 @@ nonisolated struct RepWindow: Sendable {
 
     var contactFrame: PoseFrame { frames[min(contactIndex, frames.count - 1)] }
     var duration: TimeInterval { (frames.last?.time ?? 0) - (frames.first?.time ?? 0) }
+    /// Frames within ±0.18 s of contact. Contact is estimated from peak wrist
+    /// speed, so the true contact moment can sit a frame or two off — sampling
+    /// the neighborhood makes measurements robust to that.
+    var contactNeighborhood: [PoseFrame] {
+        guard let contact = frames[safe: contactIndex], !frames.isEmpty else { return frames }
+        let low = contact.time - 0.18
+        let high = contact.time + 0.18
+        return frames.filter { $0.time >= low && $0.time <= high }
+    }
 }
 
 nonisolated enum MechanicsAnalyzer {
@@ -66,64 +75,94 @@ nonisolated enum MechanicsAnalyzer {
         }
     }
 
+    // MARK: - Sample helpers
+
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        return sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+    }
+
+    private static func mean(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
     // MARK: - Individual mechanics
 
-    /// Interior knee angle at contact, in degrees. Takes the more flexed knee,
-    /// which is the loaded leg in an athletic base.
+    /// Interior knee angle through contact, in degrees — the deepest flexion
+    /// within the contact neighborhood, which is the loaded leg in an athletic
+    /// base. A single-frame reading jumps around when Vision tracks a noisy
+    /// joint, so the neighborhood keeps the grade stable and honest.
     private static func kneeBend(_ window: RepWindow) -> MechanicMeasurement? {
-        let frame = window.contactFrame
-        var angles: [Double] = []
-        var confidences: [Double] = []
+        var deepest: (angle: Double, confidence: Double)?
+        for frame in window.contactNeighborhood {
+            var angles: [Double] = []
+            var confidences: [Double] = []
 
-        for (hip, knee, ankle) in [(PoseJoint.leftHip, PoseJoint.leftKnee, PoseJoint.leftAnkle),
-                                   (PoseJoint.rightHip, PoseJoint.rightKnee, PoseJoint.rightAnkle)] {
-            guard let h = frame.point(hip), let k = frame.point(knee), let a = frame.point(ankle) else { continue }
-            angles.append(PoseGeometry.angle(h, k, a))
-            let c = [frame.joints[hip]?.confidence, frame.joints[knee]?.confidence, frame.joints[ankle]?.confidence]
-                .compactMap { $0 }
-            confidences.append(c.reduce(0, +) / Double(max(1, c.count)))
+            for (hip, knee, ankle) in [(PoseJoint.leftHip, PoseJoint.leftKnee, PoseJoint.leftAnkle),
+                                       (PoseJoint.rightHip, PoseJoint.rightKnee, PoseJoint.rightAnkle)] {
+                guard let h = frame.point(hip), let k = frame.point(knee), let a = frame.point(ankle) else { continue }
+                angles.append(PoseGeometry.angle(h, k, a))
+                let c = [frame.joints[hip]?.confidence, frame.joints[knee]?.confidence, frame.joints[ankle]?.confidence]
+                    .compactMap { $0 }
+                confidences.append(c.reduce(0, +) / Double(max(1, c.count)))
+            }
+
+            guard let minAngle = angles.min() else { continue }
+            let confidence = confidences.max() ?? 0.3
+            if deepest == nil || minAngle < deepest!.angle { deepest = (minAngle, confidence) }
         }
-
-        guard let minAngle = angles.min() else { return nil }
-        let confidence = confidences.max() ?? 0.3
-        return MechanicMeasurement(mechanic: .kneeBend, value: minAngle, unit: "°", confidence: confidence)
+        guard let deepest else { return nil }
+        return MechanicMeasurement(mechanic: .kneeBend, value: deepest.angle, unit: "°", confidence: deepest.confidence)
     }
 
     /// How far in front of the torso contact happened, in shoulder widths.
+    /// Takes the best reach across the contact neighborhood — the single
+    /// contact frame can fall just short of the true reach extreme.
     private static func contactPosition(_ window: RepWindow, hand: Handedness) -> MechanicMeasurement? {
-        let frame = window.contactFrame
-        guard let wrist = frame.wrist(for: hand), let center = frame.shoulderCenter else { return nil }
-        let scale = frame.bodyScale
-        guard scale > 0.01 else { return nil }
+        var best: (reach: Double, confidence: Double)?
+        for frame in window.contactNeighborhood {
+            guard let wrist = frame.wrist(for: hand), let center = frame.shoulderCenter else { continue }
+            let scale = frame.bodyScale
+            guard scale > 0.01 else { continue }
 
-        // Distance from the torso centre line to the wrist, measured along the
-        // swing direction so it reads the same whether the camera is front-on
-        // or side-on.
-        let dx = wrist.x - center.x
-        let dy = wrist.y - center.y
-        let dir = window.swingDirection
-        let alongSwing = abs(dx * dir.dx + dy * dir.dy)
-        let lateral = abs(dx)
-        let reach = max(alongSwing, lateral) / scale
+            // Distance from the torso centre line to the wrist, measured along the
+            // swing direction so it reads the same whether the camera is front-on
+            // or side-on.
+            let dx = wrist.x - center.x
+            let dy = wrist.y - center.y
+            let dir = window.swingDirection
+            let alongSwing = abs(dx * dir.dx + dy * dir.dy)
+            let lateral = abs(dx)
+            let reach = max(alongSwing, lateral) / scale
 
-        let confidence = min(
-            frame.joints[hand == .right ? .rightWrist : .leftWrist]?.confidence ?? 0,
-            frame.meanConfidence
-        )
-        return MechanicMeasurement(mechanic: .contactPosition, value: reach,
-                                   unit: "×shoulder", confidence: confidence)
+            let confidence = min(
+                frame.joints[hand == .right ? .rightWrist : .leftWrist]?.confidence ?? 0,
+                frame.meanConfidence
+            )
+            if best == nil || reach > best!.reach { best = (reach, confidence) }
+        }
+        guard let best else { return nil }
+        return MechanicMeasurement(mechanic: .contactPosition, value: best.reach,
+                                   unit: "×shoulder", confidence: best.confidence)
     }
 
-    /// Elbow angle of the paddle arm at contact, in degrees.
+    /// Elbow angle of the paddle arm through contact, in degrees. The median
+    /// across the contact neighborhood resists single-frame outliers.
     private static func armStructure(_ window: RepWindow, hand: Handedness) -> MechanicMeasurement? {
-        let frame = window.contactFrame
-        guard let shoulder = frame.shoulder(for: hand),
-              let elbow = frame.elbow(for: hand),
-              let wrist = frame.wrist(for: hand) else { return nil }
-        let angle = PoseGeometry.angle(shoulder, elbow, wrist)
-        let joints: [PoseJoint] = hand == .right ? [.rightShoulder, .rightElbow, .rightWrist]
-                                                 : [.leftShoulder, .leftElbow, .leftWrist]
-        let confidence = joints.compactMap { frame.joints[$0]?.confidence }.min() ?? 0.3
+        var samples: [(angle: Double, confidence: Double)] = []
+        for frame in window.contactNeighborhood {
+            guard let shoulder = frame.shoulder(for: hand),
+                  let elbow = frame.elbow(for: hand),
+                  let wrist = frame.wrist(for: hand) else { continue }
+            let joints: [PoseJoint] = hand == .right ? [.rightShoulder, .rightElbow, .rightWrist]
+                                                     : [.leftShoulder, .leftElbow, .leftWrist]
+            let confidence = joints.compactMap { frame.joints[$0]?.confidence }.min() ?? 0.3
+            samples.append((PoseGeometry.angle(shoulder, elbow, wrist), confidence))
+        }
+        guard let angle = median(samples.map(\.angle)) else { return nil }
+        let confidence = mean(samples.map(\.confidence)) ?? 0.3
         return MechanicMeasurement(mechanic: .armStructure, value: angle, unit: "°", confidence: confidence)
     }
 
@@ -186,26 +225,38 @@ nonisolated enum MechanicsAnalyzer {
                             unit: "×shoulder/s", confidence: window.contactFrame.meanConfidence)
     }
 
-    /// Ankle separation at contact, in shoulder widths.
+    /// Ankle separation through contact, in shoulder widths. Median across the
+    /// neighborhood, so one dropped ankle joint cannot distort the stance.
     private static func stanceWidth(_ window: RepWindow) -> MechanicMeasurement? {
-        let frame = window.contactFrame
-        guard let l = frame.point(.leftAnkle), let r = frame.point(.rightAnkle) else { return nil }
-        let scale = frame.bodyScale
-        guard scale > 0.01 else { return nil }
-        let confidence = min(frame.joints[.leftAnkle]?.confidence ?? 0, frame.joints[.rightAnkle]?.confidence ?? 0)
-        return MechanicMeasurement(mechanic: .stanceWidth, value: PoseGeometry.distance(l, r) / scale,
+        var samples: [(value: Double, confidence: Double)] = []
+        for frame in window.contactNeighborhood {
+            guard let l = frame.point(.leftAnkle), let r = frame.point(.rightAnkle) else { continue }
+            let scale = frame.bodyScale
+            guard scale > 0.01 else { continue }
+            let confidence = min(frame.joints[.leftAnkle]?.confidence ?? 0, frame.joints[.rightAnkle]?.confidence ?? 0)
+            samples.append((PoseGeometry.distance(l, r) / scale, confidence))
+        }
+        guard let width = median(samples.map(\.value)) else { return nil }
+        let confidence = mean(samples.map(\.confidence)) ?? 0.3
+        return MechanicMeasurement(mechanic: .stanceWidth, value: width,
                                    unit: "×shoulder", confidence: confidence)
     }
 
     /// Contact height relative to the hips, in torso lengths. Positive = above hips.
     private static func contactHeight(_ window: RepWindow, hand: Handedness) -> MechanicMeasurement? {
-        let frame = window.contactFrame
-        guard let wrist = frame.wrist(for: hand), let hips = frame.hipCenter else { return nil }
-        let torso = frame.torsoLength
-        guard torso > 0.01 else { return nil }
-        // Screen y grows downward, so invert to make "higher" positive.
-        return MechanicMeasurement(mechanic: .contactHeight, value: (hips.y - wrist.y) / torso,
-                                   unit: "×torso", confidence: frame.meanConfidence)
+        var samples: [(value: Double, confidence: Double)] = []
+        for frame in window.contactNeighborhood {
+            guard let wrist = frame.wrist(for: hand), let hips = frame.hipCenter else { continue }
+            let torso = frame.torsoLength
+            guard torso > 0.01 else { continue }
+            let confidence = frame.meanConfidence
+            // Screen y grows downward, so invert to make "higher" positive.
+            samples.append(((hips.y - wrist.y) / torso, confidence))
+        }
+        guard let height = median(samples.map(\.value)) else { return nil }
+        let confidence = mean(samples.map(\.confidence)) ?? 0.3
+        return MechanicMeasurement(mechanic: .contactHeight, value: height,
+                                   unit: "×torso", confidence: confidence)
     }
 }
 
